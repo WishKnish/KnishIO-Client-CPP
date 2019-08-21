@@ -25,8 +25,6 @@ public:
 	static std::string hashAtomsHex(const std::vector<Atom> &atoms);
 	static std::string hashAtomsBase17(const std::vector<Atom> &atoms);
 
-	bool operator<(const Atom &other) const;
-
 public:
 	std::string							position;
 	std::string							walletAddress;

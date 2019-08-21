@@ -34,27 +34,25 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 {
 	this->molecularHash.clear();
 
-	auto position = BigInt::Rossi(sourceWallet.position, BigInt::HEX_DIGIT);
-
 	using namespace std;
 
 	// Initializing a new Atom to remove tokens from source
 	this->atoms.push_back
 	(
-		Atom(position.toStrHex(),
+		Atom(sourceWallet.position,
 			sourceWallet.address,
 			"V",
 			sourceWallet.token,
 			"-" + value,
 			"remainderWallet",
 			remainderWallet.address,
-			map<string, string> { make_pair("remainderPosition", remainderWallet.position) })
+			map<string, string>{ { "remainderPosition", remainderWallet.position } })
 	);
 
 	// Initializing a new Atom to add tokens to recipient
 	this->atoms.push_back
 	(
-		Atom((position + 1).toStrHex(),
+		Atom(recipientWallet.position,
 			recipientWallet.address,
 			"V",
 			sourceWallet.token,
@@ -359,17 +357,13 @@ bool Molecule::verifyOts(const Molecule &molecule)
 		return false;
 	}
 
-	auto atoms = molecule.atoms;
-
-	std::sort(atoms.begin(), atoms.end());
-
 	// Convert Hm to numeric notation via EnumerateMolecule(Hm)
 	auto enumeratedHash = Molecule::enumerate(molecule.molecularHash);
 	auto normalizedHash = Molecule::normalize(enumeratedHash);
 
 	std::string ots;
 
-	for (auto &atom : atoms)
+	for (auto &atom : molecule.atoms)
 	{
 		ots += atom.otsFragment;
 	}
@@ -396,7 +390,7 @@ bool Molecule::verifyOts(const Molecule &molecule)
 	// Squeeze the sponge to retrieve a 128 byte (64 character) string that should match the sender’s wallet address
 	auto address = shake256Hex(digest, 256);
 
-	return (address == atoms.front().walletAddress);
+	return (address == molecule.atoms.front().walletAddress);
 }
 
 /**

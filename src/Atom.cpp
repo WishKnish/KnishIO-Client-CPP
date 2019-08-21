@@ -120,12 +120,8 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 	return atom;
 }
 
-std::vector<unsigned char> Atom::hashAtoms(const std::vector<Atom> &atomsIn)
+std::vector<unsigned char> Atom::hashAtoms(const std::vector<Atom> &atoms)
 {
-	std::vector<Atom> atoms = atomsIn;
-
-	std::sort(atoms.begin(), atoms.end());
-
 	std::string molecularSponge;
 
 	for (const auto &atom : atoms)
@@ -169,9 +165,4 @@ std::string Atom::hashAtomsBase17(const std::vector<Atom> &atoms)
 	hashConverted.insert(hashConverted.begin(), hashConverted.size() < 64 ? 64 - hashConverted.size() : 0, '0');
 
 	return hashConverted;
-}
-
-bool Atom::operator<(const Atom &other) const
-{
-	return (this->position < other.position);
 }
