@@ -2,10 +2,12 @@
 This is an experimental C++ implementation of the Knish.IO API client. Its purpose is to expose class libraries for building and signing Knish.IO Molecules, composing Atoms (presently "M" and "V" isotopes are supported), and generating Wallet addresses (public keys) and private keys as per the Knish.IO Technical Whitepaper.
 
 # Getting Started
-1. create a new Visual C++ project or open the existing one
-2. add all Knish.IO C++ Client header and source files to the project
-3. Build a 2048-character user secret via your preferred methodology (random string?).
-4. Initialize a wallet with `Wallet wallet = new Wallet(secret, token);`
+1. Download Libsodium 1.0.18 from here: https://github.com/jedisct1/libsodium/releases/tag/1.0.18-RELEASE. Check https://download.libsodium.org/doc/installation for installation notes. Note: there are prebuilt binaries for Visual Studio 2010-2019.
+2. Create a new Visual C++ project or open a existing one.
+3. Add all Knish.IO C++ Client header and source files to the project.
+4. Add Libsodium as dependency to the project.
+5. Build a 2048-character user secret via your preferred methodology (random string?).
+6. Initialize a wallet with `Wallet wallet = new Wallet(secret, token);`.
 
 You can also specify a third, optional `position` argument represents the private key index (hexadecimal), and must NEVER be used more than once. It will be generated randmly if not provided.
 
