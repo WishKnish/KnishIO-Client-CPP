@@ -1,7 +1,7 @@
 #include "Wallet.h"
 
-#include "third_party/Keccak/Keccak.h"
 #include "utility.h"
+#include "crypto.h"
 #include "third_party/BigInt/bigInt.h"
 
 /**
@@ -25,10 +25,28 @@ Wallet::Wallet(const std::string &secret, const std::string &token, const std::s
 
 	this->address = Wallet::generateWalletAddress(this->key);
 	this->bundle = generateBundleHash(secret);
+
+	generatePublicAndPrivateKeys(this->privkey, this->pubkey);
 }
 
 Wallet::~Wallet()
 {
+}
+
+bool Wallet::generateMyPublicAndPrivateKeys()
+{
+	return generatePublicAndPrivateKeys(this->privkey, this->pubkey);
+}
+
+/**
+  * Uses the current wallet's private key to decrypt the given message
+  *
+  * @param {string} encryptedMessage hex string of encrypted data
+  * @returns {string} decrypted message (in UTF8)
+  */
+std::string Wallet::decryptMyMessage(const std::string &encryptedMessage)
+{
+	return decryptMessage(encryptedMessage, this->pubkey, this->privkey);
 }
 
 /**

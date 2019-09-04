@@ -4,6 +4,7 @@
 #include "third_party/Keccak/Keccak.h"
 
 #include <random>
+#include <codecvt>
 
 std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom, unsigned int baseTo, const char *baseToSymbolTable)
 {
@@ -44,6 +45,24 @@ std::string toHexString(const std::vector<unsigned char> &data)
 	}
 
 	return out;
+}
+
+std::vector<unsigned char> fromHexString(const std::string &str)
+{
+	std::vector<unsigned char> bytes;
+	bytes.reserve(str.size() / 2);
+
+	for (size_t i = 0; i < str.size(); i += 2)
+	{
+		if (i + 1 >= str.size()) break;
+
+		unsigned int byte;
+		sscanf_s(&str[i], "%02x", &byte);
+
+		bytes.push_back(byte);
+	}
+
+	return bytes;
 }
 
 std::vector<std::string> chunkSubstr(const std::string &str, size_t size)
@@ -103,4 +122,18 @@ std::vector<unsigned char> shake256(const std::string &str, size_t shake256_bits
 std::string shake256Hex(const std::string &str, size_t shake256_size)
 {
 	return toHexString(shake256(str, shake256_size));
+}
+
+std::string toUtf8(const std::wstring &wstr)
+{
+	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> convert;
+
+	return convert.to_bytes(wstr);
+}
+
+std::wstring fromUtf8(const std::string &str)
+{
+	std::wstring_convert<std::codecvt_utf8<wchar_t>> wconverter;
+
+	return wconverter.from_bytes(str);
 }
