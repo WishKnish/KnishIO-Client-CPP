@@ -5,6 +5,7 @@
 
 #include <random>
 #include <codecvt>
+#include <sodium.h>
 
 std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom, unsigned int baseTo, const char *baseToSymbolTable)
 {
@@ -89,21 +90,22 @@ std::vector<std::string> chunkSubstr(const std::string &str, size_t size)
  */
 std::string randomString(size_t length, const char *alphabet)
 {
-	if (alphabet == nullptr) return std::string();
-
-	// TODO: need crypto random numbers
-	thread_local std::mt19937 randomGen(std::random_device{}()); // seed by random device
-
-	std::string out;
-	out.reserve(length);
-
-	for (size_t i = 0; i < length; i++)
+	if (length == 0 || alphabet == nullptr)
 	{
-		unsigned int randomValue = randomGen();
-		out.push_back(alphabet[randomValue % strlen(alphabet)]);
+		return std::string();
 	}
 
-	return out;
+	std::string bytes;
+	bytes.resize(length);
+
+	randombytes_buf(&bytes[0], bytes.size());
+
+	for (auto &byte : bytes)
+	{
+		byte = alphabet[static_cast<unsigned char>(byte) % strlen(alphabet)];
+	}
+
+	return bytes;
 }
 
 std::vector<unsigned char> shake256(const std::string &str, size_t shake256_bits_size)
