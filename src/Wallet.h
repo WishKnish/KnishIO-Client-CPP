@@ -2,6 +2,10 @@
 
 #include <string>
 #include <vector>
+#include <map>
+#include <cstdint>
+
+namespace KnishIO {
 
 class Wallet
 {
@@ -11,6 +15,18 @@ public:
 
 	bool generateMyPublicAndPrivateKeys();
 	std::string decryptMyMessage(const std::string &message);
+
+	// ML-KEM768 post-quantum cryptography methods (JavaScript SDK compatibility)
+	void initializeMLKEM();
+	std::map<std::string, std::string> encryptMessageML768(const std::string& message, const std::string& recipient_pubkey);
+	std::string decryptMessageML768(const std::map<std::string, std::string>& encrypted_data);
+
+private:
+	// AES-256-GCM helper methods for ML-KEM768 message encryption
+	std::vector<uint8_t> encryptWithSharedSecret(const std::vector<uint8_t>& message, const std::vector<uint8_t>& shared_secret);
+	std::vector<uint8_t> decryptWithSharedSecret(const std::vector<uint8_t>& encrypted_message, const std::vector<uint8_t>& shared_secret);
+
+public:
 
 	static std::string generateBundleHash(const std::string &secret);
 	static std::string generateWalletKey(const std::string &secret, const std::string &token, const std::string &position);
@@ -26,4 +42,10 @@ public:
 	std::string bundle;
 	std::vector<unsigned char> privkey;
 	std::vector<unsigned char> pubkey;
+
+	// ML-KEM768 post-quantum cryptography keys (JavaScript SDK compatibility)
+	std::vector<uint8_t> mlkem_public_key;
+	std::vector<uint8_t> mlkem_private_key;
 };
+
+} // namespace KnishIO

@@ -259,3 +259,36 @@ paket-files/
 # Python Tools for Visual Studio (PTVS)
 __pycache__/
 *.pyc
+
+### CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+cmake-build-*/
+build/
+build-*/
+_deps/
+install_manifest.txt
+CTestTestfile.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+!cmake/*.cmake.in
+!cmake/KnishIOClientCPPConfig.cmake.in
+
+### C++ build artifacts
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.exe
+cpp_self_test
+cpp_tests
+knishio-client-cpp
+libknishio-client-cpp.*
+
+### Generated files
+knishio_config.h
+config.h

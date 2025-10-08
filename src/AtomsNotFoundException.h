@@ -1,12 +1,13 @@
 #pragma once
 
-#include <exception>
+#include <stdexcept>
 #include <iostream>
 #include <string>
 
-class AtomsNotFoundException : public std::exception
+class AtomsNotFoundException : public std::runtime_error
 {
 public:
-	AtomsNotFoundException() : std::exception("The molecule does not contain atoms") {}
-	AtomsNotFoundException(const char *msg) : std::exception(msg) {}
+	AtomsNotFoundException() : std::runtime_error("The molecule does not contain atoms") {}
+	AtomsNotFoundException(const char *msg) : std::runtime_error(msg) {}
+	AtomsNotFoundException(const std::string &msg) : std::runtime_error(msg) {}
 };

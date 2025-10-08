@@ -1,6 +1,7 @@
 #include "crypto.h"
 
 #include <sodium.h>
+#include <stdexcept>
 #include "utility.h"
 
 /**
@@ -12,25 +13,47 @@
  */
 std::string encryptMessage(const std::string &messageUtf8, const std::vector<unsigned char> &recipientPublicKey)
 {
-	if (messageUtf8.empty())
-	{
+	// Initialize libsodium if not already done
+	if (sodium_init() < 0) {
+		throw std::runtime_error("Failed to initialize libsodium");
+	}
+
+	if (messageUtf8.empty()) {
 		return std::string();
 	}
 
-	if (recipientPublicKey.size() != crypto_box_PUBLICKEYBYTES)
-	{
-		throw std::exception("wrong public key size");
+	if (recipientPublicKey.size() != crypto_box_PUBLICKEYBYTES) {
+		throw std::invalid_argument("Invalid public key size. Expected " + 
+			std::to_string(crypto_box_PUBLICKEYBYTES) + " bytes");
 	}
 
-	std::vector<unsigned char> encrypted;
-	encrypted.resize(crypto_box_SEALBYTES + messageUtf8.size());
+	try {
+		std::vector<unsigned char> encrypted;
+		encrypted.resize(crypto_box_SEALBYTES + messageUtf8.size());
 
-	if (crypto_box_seal(encrypted.data(), (const unsigned char*)messageUtf8.data(), (long long)messageUtf8.size(), recipientPublicKey.data()) != 0)
-	{
-		return std::string();
+		int result = crypto_box_seal(
+			encrypted.data(), 
+			reinterpret_cast<const unsigned char*>(messageUtf8.data()), 
+			messageUtf8.size(), 
+			recipientPublicKey.data()
+		);
+
+		if (result != 0) {
+			// Securely clear the encrypted buffer before throwing
+			sodium_memzero(encrypted.data(), encrypted.size());
+			throw std::runtime_error("Encryption failed");
+		}
+
+		std::string result_hex = toHexString(encrypted);
+		
+		// Securely clear the intermediate encrypted buffer
+		sodium_memzero(encrypted.data(), encrypted.size());
+		
+		return result_hex;
+		
+	} catch (const std::exception& e) {
+		throw std::runtime_error("Message encryption failed: " + std::string(e.what()));
 	}
-
-	return toHexString(encrypted);
 }
 
 /**
@@ -43,55 +66,126 @@ std::string encryptMessage(const std::string &messageUtf8, const std::vector<uns
  */
 std::string decryptMessage(const std::string &encryptedMessage, const std::vector<unsigned char> &recipientPublicKey, const std::vector<unsigned char> &recipientPrivateKey)
 {
-	if (encryptedMessage.empty())
-	{
+	// Initialize libsodium if not already done
+	if (sodium_init() < 0) {
+		throw std::runtime_error("Failed to initialize libsodium");
+	}
+
+	if (encryptedMessage.empty()) {
 		return std::string();
 	}
 
-	if (recipientPublicKey.size() != crypto_box_PUBLICKEYBYTES)
-	{
-		throw std::exception("wrong public key size");
+	if (recipientPublicKey.size() != crypto_box_PUBLICKEYBYTES) {
+		throw std::invalid_argument("Invalid public key size. Expected " + 
+			std::to_string(crypto_box_PUBLICKEYBYTES) + " bytes");
 	}
 
-	if (recipientPrivateKey.size() != crypto_box_SECRETKEYBYTES)
-	{
-		throw std::exception("wrong secret key size");
+	if (recipientPrivateKey.size() != crypto_box_SECRETKEYBYTES) {
+		throw std::invalid_argument("Invalid private key size. Expected " + 
+			std::to_string(crypto_box_SECRETKEYBYTES) + " bytes");
 	}
 
-	std::vector<unsigned char> encryptedBytes = fromHexString(encryptedMessage);
-
-	if (encryptedBytes.size() < crypto_box_SEALBYTES)
-	{
-		throw std::exception("wrong encrypted message size");
-	}
-
-	if (encryptedBytes.size() == crypto_box_SEALBYTES)
-	{
-		return std::string();
-	}
-
+	std::vector<unsigned char> encryptedBytes;
 	std::vector<unsigned char> decrypted;
-	decrypted.resize(encryptedBytes.size() - crypto_box_SEALBYTES);
 
-	if (crypto_box_seal_open(decrypted.data(), encryptedBytes.data(), (long long)encryptedBytes.size(), recipientPublicKey.data(), recipientPrivateKey.data()) != 0)
-	{
-		return std::string();
+	try {
+		encryptedBytes = fromHexString(encryptedMessage);
+
+		if (encryptedBytes.size() < crypto_box_SEALBYTES) {
+			throw std::invalid_argument("Encrypted message too short. Minimum size: " + 
+				std::to_string(crypto_box_SEALBYTES) + " bytes");
+		}
+
+		if (encryptedBytes.size() == crypto_box_SEALBYTES) {
+			// Securely clear intermediate data
+			sodium_memzero(encryptedBytes.data(), encryptedBytes.size());
+			return std::string();
+		}
+
+		decrypted.resize(encryptedBytes.size() - crypto_box_SEALBYTES);
+
+		int result = crypto_box_seal_open(
+			decrypted.data(), 
+			encryptedBytes.data(), 
+			encryptedBytes.size(), 
+			recipientPublicKey.data(), 
+			recipientPrivateKey.data()
+		);
+
+		if (result != 0) {
+			// Securely clear sensitive data before throwing
+			sodium_memzero(encryptedBytes.data(), encryptedBytes.size());
+			sodium_memzero(decrypted.data(), decrypted.size());
+			throw std::runtime_error("Decryption failed - invalid ciphertext or keys");
+		}
+
+		std::string result_str(decrypted.begin(), decrypted.end());
+		
+		// Securely clear intermediate buffers
+		sodium_memzero(encryptedBytes.data(), encryptedBytes.size());
+		sodium_memzero(decrypted.data(), decrypted.size());
+		
+		return result_str;
+		
+	} catch (const std::exception& e) {
+		// Ensure cleanup even on exception
+		if (!encryptedBytes.empty()) {
+			sodium_memzero(encryptedBytes.data(), encryptedBytes.size());
+		}
+		if (!decrypted.empty()) {
+			sodium_memzero(decrypted.data(), decrypted.size());
+		}
+		throw std::runtime_error("Message decryption failed: " + std::string(e.what()));
 	}
-
-	return std::string(decrypted.begin(), decrypted.end());
 }
 
 /**
  * Generates public and private key pair
  *
- * @param publicKey public key
- * @param privateKey private key
+ * @param publicKey public key (output parameter)
+ * @param privateKey private key (output parameter)  
  * @returns success
  */
 bool generatePublicAndPrivateKeys(std::vector<unsigned char> &publicKey, std::vector<unsigned char> &privateKey)
 {
-	publicKey.resize(crypto_box_PUBLICKEYBYTES);
-	privateKey.resize(crypto_box_SECRETKEYBYTES);
+	try {
+		// Initialize libsodium if not already done
+		if (sodium_init() < 0) {
+			throw std::runtime_error("Failed to initialize libsodium");
+		}
 
-	return (crypto_box_keypair(publicKey.data(), privateKey.data()) == 0);
+		// Securely clear any existing key data
+		if (!publicKey.empty()) {
+			sodium_memzero(publicKey.data(), publicKey.size());
+		}
+		if (!privateKey.empty()) {
+			sodium_memzero(privateKey.data(), privateKey.size());
+		}
+
+		// Resize vectors to correct key sizes
+		publicKey.resize(crypto_box_PUBLICKEYBYTES);
+		privateKey.resize(crypto_box_SECRETKEYBYTES);
+
+		// Generate the key pair
+		int result = crypto_box_keypair(publicKey.data(), privateKey.data());
+
+		if (result != 0) {
+			// Clear potentially partially written keys on failure
+			sodium_memzero(publicKey.data(), publicKey.size());
+			sodium_memzero(privateKey.data(), privateKey.size());
+			return false;
+		}
+
+		return true;
+
+	} catch (const std::exception&) {
+		// Ensure keys are cleared on any exception
+		if (!publicKey.empty()) {
+			sodium_memzero(publicKey.data(), publicKey.size());
+		}
+		if (!privateKey.empty()) {
+			sodium_memzero(privateKey.data(), privateKey.size());
+		}
+		return false;
+	}
 }

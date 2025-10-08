@@ -2,6 +2,8 @@
 
 #include "Atom.h"
 
+namespace KnishIO {
+
 class Wallet;
 
 /**
@@ -15,8 +17,8 @@ public:
 
 	std::vector<Atom> initValue(const Wallet &sourceWallet, const Wallet &recipientWallet, const Wallet &remainderWallet, const std::string &value);
 	std::vector<Atom> initTokenCreation(const Wallet &sourceWallet, const Wallet &recipientWallet, const std::string &amount
-		, const std::map<std::string, std::string> &tokenMeta);
-	std::vector<Atom> initMeta(const Wallet &wallet, const std::map<std::string, std::string> &meta, const std::string &metaType, const std::string &metaId);
+		, const std::vector<std::pair<std::string, std::string>> &tokenMeta);
+	std::vector<Atom> initMeta(const Wallet &wallet, const std::vector<std::pair<std::string, std::string>> &meta, const std::string &metaType, const std::string &metaId);
 
 	std::string sign(const std::string &secret, bool anonymous = false);
 
@@ -37,5 +39,11 @@ public:
 	std::string					status;
 	std::vector<Atom>			atoms;
 	std::chrono::milliseconds	createdAt;
+
+	// Cross-SDK compatibility fields (matches JavaScript, TypeScript, etc.)
+	std::shared_ptr<Wallet>		sourceWallet = nullptr;
+	std::shared_ptr<Wallet>		remainderWallet = nullptr;
 };
+
+} // namespace KnishIO
 

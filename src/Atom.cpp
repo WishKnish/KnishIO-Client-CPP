@@ -3,25 +3,31 @@
 #include "third_party/nlohmann/json.hpp"
 #include "third_party/Keccak/Keccak.h"
 #include "utility.h"
+#include <array>
+#include <iostream>
 
 using namespace std::chrono;
+
+namespace KnishIO {
 
 /**
  * class Atom
  *
  */
 Atom::Atom(const std::string &position, const std::string &walletAddress, const std::string &isotope, const std::string &token, const std::string &value
-	, const std::string &metaType, const std::string &metaId, const std::map<std::string, std::string> &meta, const std::string &otsFragment)
+	, const std::string &batchId, const std::string &metaType, const std::string &metaId, const std::vector<std::pair<std::string, std::string>> &meta, const std::string &otsFragment, int index)
 	: position(position)
 	, walletAddress(walletAddress)
 	, isotope(isotope)
 	, token(token)
 	, value(value)
+	, batchId(batchId)
 	, metaType(metaType)
 	, metaId(metaId)
 	, meta(meta)
 	, otsFragment(otsFragment)
 	, createdAt(duration_cast<milliseconds>(system_clock::now().time_since_epoch()))
+	, index(index)
 {
 }
 
@@ -34,6 +40,7 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 		"isotope",
 		"token",
 		"value",
+		"batchId",
 		"metaType",
 		"metaId",
 		"meta",
@@ -45,7 +52,7 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 
 	Atom atom("", "", "");
 
-	for (size_t i = 0; i < _countof(c_values); i++)
+	for (size_t i = 0; i < std::size(c_values); i++)
 	{
 		auto value = json.find(c_values[i]);
 
@@ -70,20 +77,32 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 				break;
 
 			case 4:
-				atom.value = value->get<std::string>();
+				if (!value->is_null()) {
+					atom.value = value->get<std::string>();
+				}
 				break;
 
 			case 5:
-				atom.metaType = value->get<std::string>();
+				if (!value->is_null()) {
+					atom.batchId = value->get<std::string>();
+				}
 				break;
 
 			case 6:
-				atom.metaId = value->get<std::string>();
+				if (!value->is_null()) {
+					atom.metaType = value->get<std::string>();
+				}
 				break;
 
 			case 7:
+				if (!value->is_null()) {
+					atom.metaId = value->get<std::string>();
+				}
+				break;
+
+			case 8:
 			{
-				std::map<std::string, std::string> metaValues;
+				std::vector<std::pair<std::string, std::string>> metaValues;
 
 				for (auto &key_value : *value)
 				{
@@ -92,7 +111,7 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 						auto key = key_value["key"].get<std::string>();
 						auto value = key_value["value"].get<std::string>();
 
-						metaValues[key] = value;
+						metaValues.push_back({key, value});
 					}
 				}
 
@@ -100,11 +119,13 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 				break;
 			}
 
-			case 8:
-				atom.otsFragment = value->get<std::string>();
+			case 9:
+				if (!value->is_null()) {
+					atom.otsFragment = value->get<std::string>();
+				}
 				break;
 
-			case 9:
+			case 10:
 			{
 				auto createdAtStr = value->get<std::string>();
 				auto createdAt = std::strtoll(createdAtStr.c_str(), NULL, 10);
@@ -124,26 +145,89 @@ std::vector<unsigned char> Atom::hashAtoms(const std::vector<Atom> &atoms)
 {
 	std::string molecularSponge;
 
-	for (const auto &atom : atoms)
+	std::cerr << "\n🔍 DEBUG: Hashing " << atoms.size() << " atoms" << std::endl;
+
+	for (size_t atomIdx = 0; atomIdx < atoms.size(); atomIdx++)
 	{
-		molecularSponge.append(std::to_string(atoms.size()));
+		const auto &atom = atoms[atomIdx];
+		std::cerr << "\n  Atom[" << atomIdx << "] " << atom.isotope << ":" << std::endl;
 
+		// Add number of atoms (matching JavaScript/C logic - added for each atom)
+		std::string atomCount = std::to_string(atoms.size());
+		molecularSponge.append(atomCount);
+		std::cerr << "    numberOfAtoms: " << atomCount << std::endl;
+
+		// Add position (required field)
 		molecularSponge.append(atom.position);
-		molecularSponge.append(atom.walletAddress);
-		molecularSponge.append(atom.isotope);
-		molecularSponge.append(atom.token);
-		molecularSponge.append(atom.value);
-		molecularSponge.append(atom.metaType);
-		molecularSponge.append(atom.metaId);
+		std::cerr << "    position: " << atom.position.substr(0, 16) << "..." << std::endl;
 
+		// Add wallet address (required field)
+		molecularSponge.append(atom.walletAddress);
+		std::cerr << "    walletAddress: " << atom.walletAddress.substr(0, 16) << "..." << std::endl;
+
+		// Add isotope (required field)
+		molecularSponge.append(atom.isotope);
+		std::cerr << "    isotope: " << atom.isotope << std::endl;
+
+		// Add token only if not empty (matching JavaScript/C logic)
+		if (!atom.token.empty()) {
+			molecularSponge.append(atom.token);
+			std::cerr << "    token: " << atom.token << std::endl;
+		} else {
+			std::cerr << "    token: SKIPPED (empty)" << std::endl;
+		}
+
+		// Add value only if not empty (matching JavaScript/C logic)
+		if (!atom.value.empty()) {
+			molecularSponge.append(atom.value);
+			std::cerr << "    value: " << atom.value << std::endl;
+		} else {
+			std::cerr << "    value: SKIPPED (empty)" << std::endl;
+		}
+
+		// Add batchId only if not empty (matching JavaScript/C logic)
+		if (!atom.batchId.empty()) {
+			molecularSponge.append(atom.batchId);
+			std::cerr << "    batchId: " << atom.batchId << std::endl;
+		} else {
+			std::cerr << "    batchId: SKIPPED (empty)" << std::endl;
+		}
+
+		// Add metaType only if not empty (matching JavaScript/C logic)
+		if (!atom.metaType.empty()) {
+			molecularSponge.append(atom.metaType);
+			std::cerr << "    metaType: " << atom.metaType << std::endl;
+		} else {
+			std::cerr << "    metaType: SKIPPED (empty)" << std::endl;
+		}
+
+		// Add metaId only if not empty (matching JavaScript/C logic)
+		if (!atom.metaId.empty()) {
+			molecularSponge.append(atom.metaId);
+			std::cerr << "    metaId: " << atom.metaId << std::endl;
+		} else {
+			std::cerr << "    metaId: SKIPPED (empty)" << std::endl;
+		}
+
+		// Add meta key/value pairs (matching JavaScript/C logic)
+		// JavaScript checks: typeof value !== 'undefined' && value !== null
+		// C++ std::string is never undefined or null, so always add all meta pairs
 		for (const auto &meta : atom.meta)
 		{
 			molecularSponge.append(meta.first); // key
-			molecularSponge.append(meta.second.empty() ? "null" : meta.second); // value
+			molecularSponge.append(meta.second); // value (even if empty string)
+			std::cerr << "    meta[" << meta.first << "]: "
+			          << (meta.second.empty() ? "(empty string)" : meta.second)
+			          << std::endl;
 		}
 
-		molecularSponge.append(std::to_string(atom.createdAt.count()));
+		// Add createdAt (required field)
+		std::string createdAtStr = std::to_string(atom.createdAt.count());
+		molecularSponge.append(createdAtStr);
+		std::cerr << "    createdAt: " << createdAtStr << std::endl;
 	}
+
+	std::cerr << "\n  Total sponge length: " << molecularSponge.length() << " bytes" << std::endl;
 
 	return shake256(molecularSponge, 256);
 }
@@ -166,3 +250,5 @@ std::string Atom::hashAtomsBase17(const std::vector<Atom> &atoms)
 
 	return hashConverted;
 }
+
+} // namespace KnishIO

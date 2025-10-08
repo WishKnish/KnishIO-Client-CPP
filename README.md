@@ -1,13 +1,83 @@
-# Knish.IO C++ Client
-This is an experimental C++ implementation of the Knish.IO API client. Its purpose is to expose class libraries for building and signing Knish.IO Molecules, composing Atoms (presently "M" and "V" isotopes are supported), and generating Wallet addresses (public keys) and private keys as per the Knish.IO Technical Whitepaper.
+# KnishIO C++ SDK
 
-# Getting Started
-1. Download Libsodium 1.0.18 from here: https://github.com/jedisct1/libsodium/releases/tag/1.0.18-RELEASE. Check https://download.libsodium.org/doc/installation for installation notes. Note: there are prebuilt binaries for Visual Studio 2010-2019.
-2. Create a new Visual C++ project or open a existing one.
-3. Add all Knish.IO C++ Client header and source files to the project.
-4. Add Libsodium as dependency to the project.
-5. Build a 2048-character user secret via your preferred methodology (random string?).
-6. Initialize a wallet with `Wallet wallet = new Wallet(secret, token);`.
+A modern C++20 implementation of the Knish.IO SDK for post-blockchain distributed ledger technology. This SDK provides comprehensive support for building and signing Molecules, composing Atoms, managing Wallets, and interacting with Knish.IO nodes via GraphQL.
+
+## Features
+
+- **Modern C++20** - Leverages latest language features for safety and performance
+- **Builder Pattern** - Flexible client configuration  
+- **Async Operations** - Non-blocking API calls using std::future
+- **GraphQL Support** - Full query and mutation support
+- **Security First** - Quantum-resistant cryptography, secure memory handling
+- **Cross-Platform** - Works on Linux, macOS, and Windows
+
+## Requirements
+
+- C++20 compatible compiler (GCC 10+, Clang 12+, MSVC 2019+)
+- CMake 3.20 or higher
+- libsodium 1.0.18+
+- libcurl 7.0+
+- POSIX threads
+
+## Building with CMake
+
+```bash
+# Clone and build
+mkdir build && cd build
+cmake ..
+cmake --build . --parallel 4
+
+# Run tests
+ctest
+
+# Build examples
+cmake -DKNISHIO_BUILD_EXAMPLES=ON ..
+cmake --build .
+```
+
+## Quick Start
+
+### Initialize Client
+
+```cpp
+#include <knishio/KnishIOClient.h>
+
+auto client = knishio::KnishIOClient::Builder()
+    .uris({"https://node1.knish.io", "https://node2.knish.io"})
+    .cellSlug("my-cell")
+    .enableLogging(true)
+    .build();
+
+// Generate secret and initialize wallet
+std::string secret = knishio::KnishIOClient::generateSecret(2048);
+client->setSecret(secret);
+```
+
+### Query Operations
+
+```cpp
+#include <knishio/query/QueryBalance.h>
+#include <knishio/http/GraphQLClient.h>
+
+knishio::http::GraphQLClient graphql("https://node.knish.io", 10000, 3);
+knishio::query::QueryBalance query(&graphql);
+
+auto response = query.execute(
+    std::nullopt,    // address
+    bundleHash,      // bundleHash
+    "USER",         // token
+    std::nullopt,    // position  
+    std::nullopt     // type
+);
+```
+
+## Traditional Usage
+
+### Initialize Wallet
+
+```cpp
+Wallet wallet(secret, token);
+```
 
 You can also specify a third, optional `position` argument represents the private key index (hexadecimal), and must NEVER be used more than once. It will be generated randmly if not provided.
 

@@ -8,6 +8,9 @@ std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom
 std::string toHexString(const std::vector<unsigned char> &data);
 std::vector<unsigned char> fromHexString(const std::string &str);
 
+std::string toBase64(const std::vector<uint8_t> &data);
+std::vector<uint8_t> fromBase64(const std::string &str);
+
 std::vector<std::string> chunkSubstr(const std::string &str, size_t size);
 std::string randomString(size_t length = 256, const char *alphabet = "abcdef0123456789");
 
