@@ -292,3 +292,6 @@ libknishio-client-cpp.*
 ### Generated files
 knishio_config.h
 config.h
+
+# macOS
+**/.DS_Store
