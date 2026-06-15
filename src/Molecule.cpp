@@ -172,10 +172,23 @@ std::vector<Atom> Molecule::initMeta(const Wallet &wallet, const std::vector<std
 			0)   // index - first atom gets index 0
 	);
 	
-	// Add ContinuID atom (I isotope) - uses fixed position and address for cross-SDK test compatibility
-	std::string continuIdPosition = "bbbb000000000000cccc111111111111dddd222222222222eeee333333333333";
-	std::string continuIdAddress = "2af8888e6dcbf7088e7fdfb3bbfb802a8c74b7d0be68b4417a9e2fb506d2f774";
-	
+	// Add ContinuID atom (I isotope) — derive from the remainder wallet + populate the meta
+	// (previousPosition/pubkey/characters), mirroring the JS reference (Molecule.js addContinuIdAtom).
+	std::string continuIdPosition = wallet.position;   // fallback when no remainder wallet is set
+	std::string continuIdAddress = wallet.address;
+	std::string continuIdMetaId = wallet.bundle;
+	std::vector<std::pair<std::string, std::string>> continuIdMeta;
+	if (this->remainderWallet != nullptr) {
+		continuIdPosition = this->remainderWallet->position;
+		continuIdAddress = this->remainderWallet->address;
+		continuIdMetaId = this->remainderWallet->bundle;
+		continuIdMeta.push_back({"previousPosition", wallet.position});
+		if (!this->remainderWallet->mlkem_public_key.empty()) {
+			continuIdMeta.push_back({"pubkey", toBase64(this->remainderWallet->mlkem_public_key)});
+		}
+		continuIdMeta.push_back({"characters", "BASE64"});
+	}
+
 	this->atoms.push_back
 	(
 		Atom(continuIdPosition,
@@ -185,8 +198,8 @@ std::vector<Atom> Molecule::initMeta(const Wallet &wallet, const std::vector<std
 			{},  // No value for ContinuID
 			"",  // batchId - empty for ContinuID atoms
 			"walletBundle",
-			wallet.bundle,
-			std::vector<std::pair<std::string, std::string>>{},  // Empty meta for ContinuID
+			continuIdMetaId,
+			continuIdMeta,
 			"",  // otsFragment - will be set during signing
 			1)   // index - second atom gets index 1
 	);

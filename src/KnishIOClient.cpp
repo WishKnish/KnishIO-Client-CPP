@@ -357,17 +357,10 @@ std::string KnishIOClient::generateSecret(const std::string& seed, size_t length
         throw KnishIOException("Secret length must be positive and even");
     }
     
-    // Generate deterministic secret using SHAKE256 with seed (matches JavaScript SDK exactly)
-    // JavaScript: outputLen: length * 2 bits, but has bug for length=128 → 64 hex chars
-    // For ML-KEM768 compatibility: length=128 should produce 64 hex chars
-    size_t bits;
-    if (length == 128) {
-        // Special case for ML-KEM768: JavaScript bug produces 64 hex chars from length=128
-        bits = 256;  // 256 bits = 64 hex chars (matches JavaScript bug)
-    } else {
-        // Standard case: produce length hex chars
-        bits = length * 4;  // Original behavior for standard cases
-    }
+    // Generate deterministic secret using SHAKE256 with seed (matches JS/Python exactly).
+    // `length` hex chars = length*4 bits, uniformly (e.g. 128 -> 512 bits -> 64 bytes -> 128 hex),
+    // matching JS/Python generateSecret(seed, 128) used to derive the 64-byte ML-KEM seed.
+    size_t bits = length * 4;
     return shake256Hex(seed, bits);
 }
 

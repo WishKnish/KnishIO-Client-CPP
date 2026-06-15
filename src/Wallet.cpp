@@ -188,17 +188,16 @@ void Wallet::initializeMLKEM() {
     }
     
     // Generate 64-byte seed from wallet key following JavaScript pattern exactly
-    // JavaScript: const seedHex = generateSecret(this.key, 128) → 64 hex chars
-    auto seed_hex = knishio::KnishIOClient::generateSecret(key, 128);  // Now produces 64 hex chars (fixed)
-    
-    // Convert hex to bytes (matching JavaScript conversion)
+    // JavaScript: const seedHex = generateSecret(this.key, 128) → 128 hex chars (64-byte d‖z seed)
+    auto seed_hex = knishio::KnishIOClient::generateSecret(key, 128);  // 128 hex chars = 64 bytes
+
+    // Convert hex to bytes — full 64-byte seed, matching JS/Python
     std::vector<uint8_t> seed_bytes(64);
-    for (size_t i = 0; i < 32; i++) {  // Only process first 32 hex pairs 
+    for (size_t i = 0; i < 64; i++) {
         if (i * 2 + 1 < seed_hex.length()) {
             std::string hex_pair = seed_hex.substr(i * 2, 2);
             seed_bytes[i] = static_cast<uint8_t>(std::stoul(hex_pair, nullptr, 16));
         }
-        // Remaining 32 bytes stay as zeros (matching JavaScript behavior)
     }
     
     // Resize vectors to correct ML-KEM768 sizes

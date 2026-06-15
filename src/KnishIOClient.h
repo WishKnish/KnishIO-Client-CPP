@@ -244,10 +244,10 @@ public:
     /**
      * Generate deterministic secret from seed (matches JavaScript SDK)
      * @param seed Input seed string for deterministic generation
-     * @param length Length of the secret in hex characters (default 1024 for JavaScript compatibility)
+     * @param length Length of the secret in hex characters (default 2048 — canonical, matches all SDKs)
      * @return Generated hexadecimal secret string
      */
-    [[nodiscard]] static std::string generateSecret(const std::string& seed, size_t length = 1024);
+    [[nodiscard]] static std::string generateSecret(const std::string& seed, size_t length = 2048);
     
     /**
      * Generate a batch ID for grouped operations

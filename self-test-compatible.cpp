@@ -115,7 +115,7 @@ struct NegativeTestResult {
 
 struct TestResults {
     std::string sdk = "C++";
-    std::string version = "1.0.0";
+    std::string version = "0.8.0";
     std::string timestamp;
     CryptoTestResult crypto;
     MoleculeTestResult meta_creation;
@@ -246,8 +246,8 @@ public:
                 "tests": {
                     "crypto": {
                         "seed": "TESTSEED",
-                        "secret": "e8ffc86d60fc6a73234a834166e7436e21df6c3209dfacc8d0bd6595707872c3799abbf7deee0f9c4b58de1fd89b9abb67a207558208d5ccf550c227d197c24e9fcc3707aeb53c4031d38392020ff72bcaa0f728aa8bc3d47d95ff0afc04d8fcdb69bff638ce56646c154fc92aa517d3c40f550d2ccacbd921724e1d94b82aed2c8e172a8a7ed5a6963f5890157fe77222b97af3787741f9d3cec0b40aec6f07ae4b2b24614f0a20e035aee0df04e176175dc100eb1b00dd7ea95c28cdec47958336945333c3bef24719ed949fa56d1541f24c725d4f374a533bf255cf22f4596147bcd1ba05abcecbe9b12095e1fdddb094616894c366498be0b5785c180100efb3c5b689fc1c01131633fe1775df52a970e9472ab7bc0c19f5742b9e9436753cd16024b2d326b763eca68c414755a0d2fdbb927f007e9413f1190578b2033a03d29387f5aea71b07a5ce80fbfd45be4a15440faadeac50e41846022894fc683a52328b470bc1860c8b038d7258f504178918502b93d84d8b0fbef3e02f89f83cb1ff033a2bdbdf2a2ba78d80c12aa8b2d6c10d76c468186bd4a4e9eacc758546bb50ed7b1ee241cc5b93ff924c7bbee6778b27789e1f9104c917fc93f735eee5b25c07a883788f3d2e0771e751c4f59b76f8426027ac2b07a2ca84534433d0a1b86cef3288e7d79e8b175a3955848cfd1dfbdcd6b5bafcf6789e56e8ef40af",
-                        "bundle": "fee9c2b9a964d060eb4645c4001db805c3c4b0cc9bba12841036eba4bf44b831"
+                        "secret": "e8ffc86d60fc6a73234a834166e7436e21df6c3209dfacc8d0bd6595707872c3799abbf7deee0f9c4b58de1fd89b9abb67a207558208d5ccf550c227d197c24e9fcc3707aeb53c4031d38392020ff72bcaa0f728aa8bc3d47d95ff0afc04d8fcdb69bff638ce56646c154fc92aa517d3c40f550d2ccacbd921724e1d94b82aed2c8e172a8a7ed5a6963f5890157fe77222b97af3787741f9d3cec0b40aec6f07ae4b2b24614f0a20e035aee0df04e176175dc100eb1b00dd7ea95c28cdec47958336945333c3bef24719ed949fa56d1541f24c725d4f374a533bf255cf22f4596147bcd1ba05abcecbe9b12095e1fdddb094616894c366498be0b5785c180100efb3c5b689fc1c01131633fe1775df52a970e9472ab7bc0c19f5742b9e9436753cd16024b2d326b763eca68c414755a0d2fdbb927f007e9413f1190578b2033a03d29387f5aea71b07a5ce80fbfd45be4a15440faadeac50e41846022894fc683a52328b470bc1860c8b038d7258f504178918502b93d84d8b0fbef3e02f89f83cb1ff033a2bdbdf2a2ba78d80c12aa8b2d6c10d76c468186bd4a4e9eacc758546bb50ed7b1ee241cc5b93ff924c7bbee6778b27789e1f9104c917fc93f735eee5b25c07a883788f3d2e0771e751c4f59b76f8426027ac2b07a2ca84534433d0a1b86cef3288e7d79e8b175a3955848cfd1dfbdcd6b5bafcf6789e56e8ef40af09a764147640eb10b426349f6ffc8e299cdcebffc3a9d6be362ba33fbf648bf06ea4c35890c705df479030fd1d0669d289dcbabaaf78f945c37fc69f3823dbfa99bdf3cf7bb7be8f810a7eab5167e26691642c3982aa203687d0e674154c970cfc1822f9917f2100ae8950cf0fcab074bfb578f4f6e78df490f0fd9becdba7151f2a5733cc2a3df845aa17bdc49765163d635de5c3a1c376683e622fe3e0a6092a35dfedc4bc5bc9c120d2ed06d899775bcd16417318f4b5c7ba27fdc0a442884a69e71543a13cb26762a0df4f47807924a15da7895b6c96accb09394fdf0232d922a99f4a9f95d46da7b9050eb661f3329fe98372175a82d5e5296e4a31c040da6407194251b5baa7338071d1edfc51f55ca409ffd885045e47412f97a4bbe2e73794d8b276ccb446843bbc38c7e580dc4dc2ba94556de0d80681f60d1b2953021e08a60e26685adf61eff91d9ca7daa04a72de9dc2822655648f3c0f5016967b0e8104d70add65b9b9ce98b3aaa10106f5f32133775a71ab9b006307e390b697c77bb828c3ad07bfdcc3ecf3149ac98dc8a230c281365719d67fd2450c717ad1391880d9c17cb8ba96b6254ac783aeae04f84f14829e4efc6ee73b77670cb9ea96dc73e5464bc4cf46cdd2ebe75009d9c4ce6097eab2858ef2899b3dcd147c579939f45c4ad2aa283b6e9c8ca2539abd5e2332cff851f4fa8c4767732d7977",
+                        "bundle": "2b77ff69a6d2f8108250389377faa6cbd42caaefa2f966e1b68a4b3fc022c83e"
                     },
                     "metaCreation": {
                         "seed": "TESTSEED",
@@ -519,11 +519,15 @@ private:
             
             Logger::test("Source wallet creation", true);
             
+            // Create the fixed remainder wallet (JS/Python parity: same secret, canonical position)
+            Wallet remainder_wallet = createFixedRemainderWallet(secret, token);
+
             // Create molecule for metadata
             Molecule molecule;
-            
-            // Set wallet reference for cross-SDK validation
+
+            // Set wallet references for cross-SDK validation
             molecule.sourceWallet = std::make_shared<Wallet>(source_wallet);
+            molecule.remainderWallet = std::make_shared<Wallet>(remainder_wallet);
             
             // Create metadata vector (JavaScript insertion order compatibility)
             std::vector<std::pair<std::string, std::string>> metadata = {
@@ -535,7 +539,10 @@ private:
             molecule.initMeta(source_wallet, metadata, meta_type, meta_id);
             
             Logger::test("Metadata molecule initialization", true);
-            
+
+            // Set fixed timestamps for deterministic testing (before signing)
+            setFixedTimestamps(molecule);
+
             // Sign the molecule
             auto signature = molecule.sign(secret, false);
             Logger::test("Molecule signing", !signature.empty());
@@ -607,8 +614,8 @@ private:
             
             Logger::test("Recipient wallet creation", true);
             
-            // Create remainder wallet (JavaScript pattern)
-            std::string remainder_position = randomString(64, "abcdef0123456789");
+            // Create remainder wallet (canonical fixed position — JS/Python parity)
+            std::string remainder_position = "bbbb000000000000cccc111111111111dddd222222222222eeee333333333333";
             Wallet remainder_wallet(source_secret, token, remainder_position);
             
             // Create molecule for value transfer
@@ -622,7 +629,10 @@ private:
             molecule.initValue(source_wallet, recipient_wallet, remainder_wallet, amount);
             
             Logger::test("Value transfer initialization", true);
-            
+
+            // Set fixed timestamps for deterministic testing (before signing)
+            setFixedTimestamps(molecule);
+
             // Sign the molecule
             auto signature = molecule.sign(source_secret, false);
             Logger::test("Molecule signing", !signature.empty());
@@ -685,8 +695,8 @@ private:
             
             Logger::test("Source wallet creation", true);
             
-            // Create remainder wallet with fixed position (matches JavaScript pattern)
-            const std::string remainder_position = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+            // Create remainder wallet with the canonical fixed position (JS/Python parity)
+            const std::string remainder_position = "bbbb000000000000cccc111111111111dddd222222222222eeee333333333333";
             Wallet remainder_wallet(source_secret, token, remainder_position);
             
             Logger::test("Remainder wallet creation", true);
@@ -708,7 +718,10 @@ private:
             molecule.initValue(source_wallet, recipient_wallet, remainder_wallet, amount);
             
             Logger::test("Value transfer with remainder initialization", true);
-            
+
+            // Set fixed timestamps for deterministic testing (before signing)
+            setFixedTimestamps(molecule);
+
             // Sign the molecule
             auto signature = molecule.sign(source_secret, false);
             Logger::test("Molecule signing", !signature.empty());
