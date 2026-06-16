@@ -115,17 +115,23 @@ struct NegativeTestResult {
 
 struct TestResults {
     std::string sdk = "C++";
-    std::string version = "0.8.0";
+    std::string version = "0.8.1";
     std::string timestamp;
     CryptoTestResult crypto;
     MoleculeTestResult meta_creation;
     MoleculeTestResult simple_transfer;
     MoleculeTestResult complex_transfer;
+    MoleculeTestResult token_creation;
+    MoleculeTestResult wallet_creation;
+    MoleculeTestResult shadow_wallet_claim;
     MLKEMTestResult mlkem768;
     NegativeTestResult negative_cases;
     std::string molecules_metadata;
     std::string molecules_simple_transfer;
     std::string molecules_complex_transfer;
+    std::string molecules_token_creation;
+    std::string molecules_wallet_creation;
+    std::string molecules_shadow_wallet_claim;
     std::string molecules_mlkem768;
     bool cross_sdk_compatible = true;
 };
@@ -281,6 +287,37 @@ public:
                         "recipient1Position": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
                         "recipient2Position": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
                     },
+                    "tokenCreation": {
+                        "sourceSeed": "TESTSEED",
+                        "recipientSeed": "RECIPIENTSEED",
+                        "sourceToken": "USER",
+                        "newToken": "TESTTOKEN",
+                        "amount": 1000000,
+                        "sourcePosition": "0123456789abcdeffedcba9876543210fedcba9876543210fedcba9876543210",
+                        "recipientPosition": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                        "metadata": {
+                            "name": "Test Token",
+                            "fungibility": "fungible",
+                            "supply": "limited",
+                            "decimals": "0"
+                        }
+                    },
+                    "walletCreation": {
+                        "sourceSeed": "TESTSEED",
+                        "newWalletSeed": "NEWWALLETSEED",
+                        "sourceToken": "USER",
+                        "newToken": "TESTTOKEN",
+                        "sourcePosition": "0123456789abcdeffedcba9876543210fedcba9876543210fedcba9876543210",
+                        "newWalletPosition": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+                    },
+                    "shadowWalletClaim": {
+                        "sourceSeed": "TESTSEED",
+                        "claimSeed": "CLAIMSEED",
+                        "sourceToken": "USER",
+                        "claimToken": "TESTTOKEN",
+                        "sourcePosition": "0123456789abcdeffedcba9876543210fedcba9876543210fedcba9876543210",
+                        "claimPosition": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+                    },
                     "mlkem768": {
                         "seed": "TESTSEED",
                         "token": "ENCRYPT",
@@ -431,25 +468,29 @@ public:
         bool meta_result = testMetaCreation();
         bool simple_result = testSimpleTransfer();
         bool complex_result = testComplexTransfer();
+        bool token_result = testTokenCreation();
+        bool wallet_result = testWalletCreation();
+        bool shadow_result = testShadowWalletClaim();
         bool mlkem_result = testMLKEM768();
         bool negative_result = testNegativeCases();
         bool cross_sdk_result = testCrossSdkValidation();
-        
+
         // Save results
         if (!saveResults()) {
             std::cerr << "Failed to save test results" << std::endl;
             return false;
         }
-        
+
         // Display summary
         displaySummary();
-        
+
         // Return success if all tests passed
-        int total_tests = 6;  // Include ML-KEM768 test and negative test cases
-        int passed_tests = (crypto_result ? 1 : 0) + (meta_result ? 1 : 0) + 
-                          (simple_result ? 1 : 0) + (complex_result ? 1 : 0) + 
+        int total_tests = 9;  // crypto + 3 base + 3 extended (token/wallet/shadow) + ML-KEM768 + negative
+        int passed_tests = (crypto_result ? 1 : 0) + (meta_result ? 1 : 0) +
+                          (simple_result ? 1 : 0) + (complex_result ? 1 : 0) +
+                          (token_result ? 1 : 0) + (wallet_result ? 1 : 0) + (shadow_result ? 1 : 0) +
                           (mlkem_result ? 1 : 0) + (negative_result ? 1 : 0);
-        
+
         return (passed_tests == total_tests);
     }
 
@@ -588,7 +629,220 @@ private:
             return false;
         }
     }
-    
+
+    bool testTokenCreation() {
+        Logger::message("\nC1. Token Creation Test", colors::BLUE);
+
+        try {
+            std::string source_seed = config_["tests"]["tokenCreation"]["sourceSeed"].get<std::string>();
+            std::string recipient_seed = config_["tests"]["tokenCreation"]["recipientSeed"].get<std::string>();
+            std::string source_token = config_["tests"]["tokenCreation"]["sourceToken"].get<std::string>();
+            std::string new_token = config_["tests"]["tokenCreation"]["newToken"].get<std::string>();
+            long long amount = config_["tests"]["tokenCreation"]["amount"].get<long long>();
+            std::string source_position = config_["tests"]["tokenCreation"]["sourcePosition"].get<std::string>();
+            std::string recipient_position = config_["tests"]["tokenCreation"]["recipientPosition"].get<std::string>();
+
+            auto source_secret = knishio::KnishIOClient::generateSecret(source_seed);
+            Wallet source_wallet(source_secret, source_token, source_position);
+            Logger::test("Source wallet creation", true);
+
+            auto recipient_secret = knishio::KnishIOClient::generateSecret(recipient_seed);
+            Wallet recipient_wallet(recipient_secret, new_token, recipient_position);
+            Logger::test("Recipient wallet creation", true);
+
+            Wallet remainder_wallet = createFixedRemainderWallet(source_secret, source_token);
+
+            Molecule molecule;
+            molecule.sourceWallet = std::make_shared<Wallet>(source_wallet);
+            molecule.remainderWallet = std::make_shared<Wallet>(remainder_wallet);
+
+            // Token meta in JS insertion order [name, fungibility, supply, decimals] (hardcoded to
+            // preserve order — nlohmann json objects sort keys alphabetically when iterated).
+            std::vector<std::pair<std::string, std::string>> token_meta = {
+                {"name", "Test Token"},
+                {"fungibility", "fungible"},
+                {"supply", "limited"},
+                {"decimals", "0"}
+            };
+
+            molecule.initTokenCreation(source_wallet, recipient_wallet, std::to_string(amount), token_meta);
+            Logger::test("Token creation initialization", true);
+
+            setFixedTimestamps(molecule);
+
+            auto signature = molecule.sign(source_secret, false);
+            Logger::test("Molecule signing", !signature.empty());
+
+            MoleculeInspector::inspect(molecule, "TOKEN CREATION MOLECULE");
+            MoleculeInspector::diagnoseValidation(molecule, "TOKEN CREATION MOLECULE");
+
+            bool is_valid = false;
+            std::string validation_error = "null";
+            try {
+                is_valid = Molecule::verify(molecule);
+                if (!is_valid) {
+                    validation_error = "Validation returned false";
+                }
+            } catch (const std::exception& e) {
+                is_valid = false;
+                validation_error = std::string("Signature verification failed: ") + e.what();
+            }
+
+            Logger::test("Molecule validation", is_valid, validation_error);
+
+            results_.molecules_token_creation = molecule.toJson();
+            results_.token_creation = {
+                .passed = is_valid,
+                .molecular_hash = molecule.molecularHash,
+                .atom_count = static_cast<int>(molecule.atoms.size()),
+                .validation_error = validation_error
+            };
+
+            return is_valid;
+
+        } catch (const std::exception& e) {
+            results_.token_creation.validation_error = e.what();
+            std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
+            return false;
+        }
+    }
+
+    bool testWalletCreation() {
+        Logger::message("\nC2. Wallet Creation Test", colors::BLUE);
+
+        try {
+            std::string source_seed = config_["tests"]["walletCreation"]["sourceSeed"].get<std::string>();
+            std::string new_wallet_seed = config_["tests"]["walletCreation"]["newWalletSeed"].get<std::string>();
+            std::string source_token = config_["tests"]["walletCreation"]["sourceToken"].get<std::string>();
+            std::string new_token = config_["tests"]["walletCreation"]["newToken"].get<std::string>();
+            std::string source_position = config_["tests"]["walletCreation"]["sourcePosition"].get<std::string>();
+            std::string new_wallet_position = config_["tests"]["walletCreation"]["newWalletPosition"].get<std::string>();
+
+            auto source_secret = knishio::KnishIOClient::generateSecret(source_seed);
+            Wallet source_wallet(source_secret, source_token, source_position);
+            Logger::test("Source wallet creation", true);
+
+            auto new_wallet_secret = knishio::KnishIOClient::generateSecret(new_wallet_seed);
+            Wallet new_wallet(new_wallet_secret, new_token, new_wallet_position);
+            Logger::test("New wallet creation", true);
+
+            Wallet remainder_wallet = createFixedRemainderWallet(source_secret, source_token);
+
+            Molecule molecule;
+            molecule.sourceWallet = std::make_shared<Wallet>(source_wallet);
+            molecule.remainderWallet = std::make_shared<Wallet>(remainder_wallet);
+
+            molecule.initWalletCreation(source_wallet, new_wallet);
+            Logger::test("Wallet creation initialization", true);
+
+            setFixedTimestamps(molecule);
+
+            auto signature = molecule.sign(source_secret, false);
+            Logger::test("Molecule signing", !signature.empty());
+
+            MoleculeInspector::inspect(molecule, "WALLET CREATION MOLECULE");
+            MoleculeInspector::diagnoseValidation(molecule, "WALLET CREATION MOLECULE");
+
+            bool is_valid = false;
+            std::string validation_error = "null";
+            try {
+                is_valid = Molecule::verify(molecule);
+                if (!is_valid) {
+                    validation_error = "Validation returned false";
+                }
+            } catch (const std::exception& e) {
+                is_valid = false;
+                validation_error = std::string("Signature verification failed: ") + e.what();
+            }
+
+            Logger::test("Molecule validation", is_valid, validation_error);
+
+            results_.molecules_wallet_creation = molecule.toJson();
+            results_.wallet_creation = {
+                .passed = is_valid,
+                .molecular_hash = molecule.molecularHash,
+                .atom_count = static_cast<int>(molecule.atoms.size()),
+                .validation_error = validation_error
+            };
+
+            return is_valid;
+
+        } catch (const std::exception& e) {
+            results_.wallet_creation.validation_error = e.what();
+            std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
+            return false;
+        }
+    }
+
+    bool testShadowWalletClaim() {
+        Logger::message("\nC3. Shadow Wallet Claim Test", colors::BLUE);
+
+        try {
+            std::string source_seed = config_["tests"]["shadowWalletClaim"]["sourceSeed"].get<std::string>();
+            std::string claim_seed = config_["tests"]["shadowWalletClaim"]["claimSeed"].get<std::string>();
+            std::string source_token = config_["tests"]["shadowWalletClaim"]["sourceToken"].get<std::string>();
+            std::string claim_token = config_["tests"]["shadowWalletClaim"]["claimToken"].get<std::string>();
+            std::string source_position = config_["tests"]["shadowWalletClaim"]["sourcePosition"].get<std::string>();
+            std::string claim_position = config_["tests"]["shadowWalletClaim"]["claimPosition"].get<std::string>();
+
+            auto source_secret = knishio::KnishIOClient::generateSecret(source_seed);
+            Wallet source_wallet(source_secret, source_token, source_position);
+            Logger::test("Source wallet creation", true);
+
+            auto claim_secret = knishio::KnishIOClient::generateSecret(claim_seed);
+            Wallet claim_wallet(claim_secret, claim_token, claim_position);
+            Logger::test("Claim wallet creation", true);
+
+            Wallet remainder_wallet = createFixedRemainderWallet(source_secret, source_token);
+
+            Molecule molecule;
+            molecule.sourceWallet = std::make_shared<Wallet>(source_wallet);
+            molecule.remainderWallet = std::make_shared<Wallet>(remainder_wallet);
+
+            // The token param is vestigial in JS (it takes only the wallet) — C++ initShadowWalletClaim
+            // takes (sourceWallet, wallet); the claim token rides on walletTokenSlug via setMetaWallet.
+            molecule.initShadowWalletClaim(source_wallet, claim_wallet);
+            Logger::test("Shadow wallet claim initialization", true);
+
+            setFixedTimestamps(molecule);
+
+            auto signature = molecule.sign(source_secret, false);
+            Logger::test("Molecule signing", !signature.empty());
+
+            MoleculeInspector::inspect(molecule, "SHADOW WALLET CLAIM MOLECULE");
+            MoleculeInspector::diagnoseValidation(molecule, "SHADOW WALLET CLAIM MOLECULE");
+
+            bool is_valid = false;
+            std::string validation_error = "null";
+            try {
+                is_valid = Molecule::verify(molecule);
+                if (!is_valid) {
+                    validation_error = "Validation returned false";
+                }
+            } catch (const std::exception& e) {
+                is_valid = false;
+                validation_error = std::string("Signature verification failed: ") + e.what();
+            }
+
+            Logger::test("Molecule validation", is_valid, validation_error);
+
+            results_.molecules_shadow_wallet_claim = molecule.toJson();
+            results_.shadow_wallet_claim = {
+                .passed = is_valid,
+                .molecular_hash = molecule.molecularHash,
+                .atom_count = static_cast<int>(molecule.atoms.size()),
+                .validation_error = validation_error
+            };
+
+            return is_valid;
+
+        } catch (const std::exception& e) {
+            results_.shadow_wallet_claim.validation_error = e.what();
+            std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
+            return false;
+        }
+    }
+
     bool testSimpleTransfer() {
         Logger::message("\n3. Simple Transfer Test", colors::BLUE);
         
@@ -944,6 +1198,48 @@ private:
                         }
                     }
 
+                    // Validate tokenCreation molecule
+                    if (molecules.contains("tokenCreation") && molecules["tokenCreation"].is_string()) {
+                        try {
+                            std::string molecule_json = molecules["tokenCreation"].get<std::string>();
+                            Molecule molecule = Molecule::jsonToObject(molecule_json);
+                            bool is_valid = Molecule::verify(molecule);
+                            Logger::test(sdk_name + " tokenCreation molecule validation", is_valid);
+                            if (!is_valid) all_valid = false;
+                        } catch (const std::exception& e) {
+                            Logger::test(sdk_name + " tokenCreation molecule validation", false, e.what());
+                            all_valid = false;
+                        }
+                    }
+
+                    // Validate walletCreation molecule
+                    if (molecules.contains("walletCreation") && molecules["walletCreation"].is_string()) {
+                        try {
+                            std::string molecule_json = molecules["walletCreation"].get<std::string>();
+                            Molecule molecule = Molecule::jsonToObject(molecule_json);
+                            bool is_valid = Molecule::verify(molecule);
+                            Logger::test(sdk_name + " walletCreation molecule validation", is_valid);
+                            if (!is_valid) all_valid = false;
+                        } catch (const std::exception& e) {
+                            Logger::test(sdk_name + " walletCreation molecule validation", false, e.what());
+                            all_valid = false;
+                        }
+                    }
+
+                    // Validate shadowWalletClaim molecule
+                    if (molecules.contains("shadowWalletClaim") && molecules["shadowWalletClaim"].is_string()) {
+                        try {
+                            std::string molecule_json = molecules["shadowWalletClaim"].get<std::string>();
+                            Molecule molecule = Molecule::jsonToObject(molecule_json);
+                            bool is_valid = Molecule::verify(molecule);
+                            Logger::test(sdk_name + " shadowWalletClaim molecule validation", is_valid);
+                            if (!is_valid) all_valid = false;
+                        } catch (const std::exception& e) {
+                            Logger::test(sdk_name + " shadowWalletClaim molecule validation", false, e.what());
+                            all_valid = false;
+                        }
+                    }
+
                     // ML-KEM768 encryption compatibility test
                     if (molecules.contains("mlkem768") && molecules["mlkem768"].is_string()) {
                         try {
@@ -1059,7 +1355,28 @@ private:
                 {"hasRemainder", results_.complex_transfer.has_remainder},
                 {"validationError", results_.complex_transfer.validation_error}
             };
-            
+
+            tests["tokenCreation"] = {
+                {"passed", results_.token_creation.passed},
+                {"molecularHash", results_.token_creation.molecular_hash},
+                {"atomCount", results_.token_creation.atom_count},
+                {"validationError", results_.token_creation.validation_error}
+            };
+
+            tests["walletCreation"] = {
+                {"passed", results_.wallet_creation.passed},
+                {"molecularHash", results_.wallet_creation.molecular_hash},
+                {"atomCount", results_.wallet_creation.atom_count},
+                {"validationError", results_.wallet_creation.validation_error}
+            };
+
+            tests["shadowWalletClaim"] = {
+                {"passed", results_.shadow_wallet_claim.passed},
+                {"molecularHash", results_.shadow_wallet_claim.molecular_hash},
+                {"atomCount", results_.shadow_wallet_claim.atom_count},
+                {"validationError", results_.shadow_wallet_claim.validation_error}
+            };
+
             tests["mlkem768"] = {
                 {"passed", results_.mlkem768.passed},
                 {"publicKeyGenerated", results_.mlkem768.public_key_generated},
@@ -1079,6 +1396,9 @@ private:
             molecules["metadata"] = results_.molecules_metadata;
             molecules["simpleTransfer"] = results_.molecules_simple_transfer;
             molecules["complexTransfer"] = results_.molecules_complex_transfer;
+            molecules["tokenCreation"] = results_.molecules_token_creation;
+            molecules["walletCreation"] = results_.molecules_wallet_creation;
+            molecules["shadowWalletClaim"] = results_.molecules_shadow_wallet_claim;
             molecules["mlkem768"] = results_.molecules_mlkem768;
             root["molecules"] = molecules;
             
@@ -1114,12 +1434,15 @@ private:
         std::cout << "Timestamp: " << results_.timestamp << std::endl;
         
         // Count passed tests
-        int total_tests = 6;  // Include ML-KEM768 test and negative test cases
+        int total_tests = 9;  // crypto + 3 base + 3 extended (token/wallet/shadow) + ML-KEM768 + negative
         int passed_tests = 0;
         if (results_.crypto.passed) passed_tests++;
         if (results_.meta_creation.passed) passed_tests++;
         if (results_.simple_transfer.passed) passed_tests++;
         if (results_.complex_transfer.passed) passed_tests++;
+        if (results_.token_creation.passed) passed_tests++;
+        if (results_.wallet_creation.passed) passed_tests++;
+        if (results_.shadow_wallet_claim.passed) passed_tests++;
         if (results_.mlkem768.passed) passed_tests++;
         if (results_.negative_cases.passed) passed_tests++;
         
@@ -1140,6 +1463,15 @@ private:
             }
             if (!results_.complex_transfer.passed) {
                 std::cout << "  - complexTransfer: Validation failed" << std::endl;
+            }
+            if (!results_.token_creation.passed) {
+                std::cout << "  - tokenCreation: Validation failed" << std::endl;
+            }
+            if (!results_.wallet_creation.passed) {
+                std::cout << "  - walletCreation: Validation failed" << std::endl;
+            }
+            if (!results_.shadow_wallet_claim.passed) {
+                std::cout << "  - shadowWalletClaim: Validation failed" << std::endl;
             }
             if (!results_.mlkem768.passed) {
                 std::cout << "  - mlkem768: " << results_.mlkem768.error << std::endl;

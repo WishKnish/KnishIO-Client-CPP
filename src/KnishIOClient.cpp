@@ -20,7 +20,7 @@ using KnishIO::Molecule;
 using KnishIO::Atom;
 
 // Version information
-constexpr const char* SDK_VERSION = "1.0.0";
+constexpr const char* SDK_VERSION = "0.8.1";
 
 // Forward declare implementation class
 class KnishIOClient::Impl {

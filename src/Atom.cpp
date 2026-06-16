@@ -109,7 +109,17 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 					if (key_value.find("key") != key_value.end() && key_value.find("value") != key_value.end())
 					{
 						auto key = key_value["key"].get<std::string>();
-						auto value = key_value["value"].get<std::string>();
+						const auto &metaVal = key_value["value"];
+
+						// Cross-SDK meta values are not always strings: an absent optional key (e.g.
+						// walletBatchId) may be serialized as null — every SDK SKIPS null meta in the
+						// molecular hash, so skip it here too (else the re-hash diverges); a flag like
+						// shadowWalletClaim may be serialized as the number 1 — stringify scalars to
+						// their canonical text ("1") so the re-hash matches the producer.
+						if (metaVal.is_null()) {
+							continue;
+						}
+						auto value = metaVal.is_string() ? metaVal.get<std::string>() : metaVal.dump();
 
 						metaValues.push_back({key, value});
 					}

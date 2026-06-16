@@ -25,6 +25,34 @@ Molecule::~Molecule()
 {
 }
 
+namespace {
+
+/**
+ * Builds the prefixed wallet* meta keys in JS setMetaWallet() order, mirroring
+ * AtomMeta.setMetaWallet(): walletTokenSlug, walletBundleHash, walletAddress, walletPosition,
+ * walletBatchId, walletPubkey, walletCharacters.
+ *
+ * Optional keys are emitted ONLY when non-empty: C++ hashAtoms appends EVERY meta pair (even an
+ * empty value), unlike JS which skips null/empty — so emitting an empty key would diverge the hash.
+ * walletBatchId is omitted (no Wallet field; null in JS -> skipped either way); walletCharacters is
+ * the project-wide "BASE64" encoding (matching the ContinuID I-atom convention).
+ */
+std::vector<std::pair<std::string, std::string>> buildWalletMetaKeys(const Wallet &wallet)
+{
+	std::vector<std::pair<std::string, std::string>> walletMeta;
+	walletMeta.push_back({"walletTokenSlug", wallet.token});
+	walletMeta.push_back({"walletBundleHash", wallet.bundle});
+	walletMeta.push_back({"walletAddress", wallet.address});
+	walletMeta.push_back({"walletPosition", wallet.position});
+	if (!wallet.mlkem_public_key.empty()) {
+		walletMeta.push_back({"walletPubkey", toBase64(wallet.mlkem_public_key)});
+	}
+	walletMeta.push_back({"walletCharacters", "BASE64"});
+	return walletMeta;
+}
+
+} // anonymous namespace
+
 /**
   * Initialize a V-type molecule to transfer value from one wallet to another, with a third,
   * regenerated wallet receiving the remainder
@@ -107,26 +135,15 @@ std::vector<Atom> Molecule::initTokenCreation(const Wallet &sourceWallet, const 
 {
 	this->molecularHash.clear();
 
-	auto tokenMetaNew = tokenMeta;
-
-	// tokenMeta: add fields address and position if not presented
-	auto itToken = std::find_if(tokenMetaNew.begin(), tokenMetaNew.end(),
-		[](const std::pair<std::string, std::string>& p) { return p.first == "walletAddress"; });
-
-	if (itToken == tokenMetaNew.end())
-	{
-		tokenMetaNew.push_back({"address", recipientWallet.address});
-	}
-
-	itToken = std::find_if(tokenMetaNew.begin(), tokenMetaNew.end(),
-		[](const std::pair<std::string, std::string>& p) { return p.first == "walletPosition"; });
-
-	if (itToken == tokenMetaNew.end())
-	{
-		tokenMetaNew.push_back({"position", recipientWallet.position});
-	}
+	// Build the C-atom meta: the user token meta FIRST, then the 7 prefixed wallet* keys via
+	// buildWalletMetaKeys (JS: new AtomMeta(meta).setMetaWallet(recipientWallet)). Replaces the
+	// prior unprefixed address/position append.
+	auto finalMeta = tokenMeta;
+	auto walletKeys = buildWalletMetaKeys(recipientWallet);
+	finalMeta.insert(finalMeta.end(), walletKeys.begin(), walletKeys.end());
 
 	// The primary atom tells the ledger that a certain amount of the new token is being issued.
+	// Position/address/token come from the SOURCE (signing) wallet; value/metaId from the recipient.
 	this->atoms.push_back
 	(
 		Atom(sourceWallet.position,
@@ -134,11 +151,16 @@ std::vector<Atom> Molecule::initTokenCreation(const Wallet &sourceWallet, const 
 			"C",
 			sourceWallet.token,
 			amount,
-			"",  // batchId - empty for token creation
+			"",  // batchId - empty (JS recipientWallet.batchId is null -> hash-skipped)
 			"token",
 			recipientWallet.token,
-			tokenMetaNew)
+			finalMeta,
+			"",  // otsFragment - will be set during signing
+			0)   // index - first atom gets index 0
 	);
+
+	// ContinuID atom (I isotope), mirroring JS addContinuIdAtom() — was missing (1-atom molecule).
+	this->addContinuIdAtom(sourceWallet, 1);
 
 	return this->atoms;
 }
@@ -172,17 +194,32 @@ std::vector<Atom> Molecule::initMeta(const Wallet &wallet, const std::vector<std
 			0)   // index - first atom gets index 0
 	);
 	
-	// Add ContinuID atom (I isotope) — derive from the remainder wallet + populate the meta
-	// (previousPosition/pubkey/characters), mirroring the JS reference (Molecule.js addContinuIdAtom).
-	std::string continuIdPosition = wallet.position;   // fallback when no remainder wallet is set
-	std::string continuIdAddress = wallet.address;
-	std::string continuIdMetaId = wallet.bundle;
+	// ContinuID atom (I isotope) — mirrors JS addContinuIdAtom().
+	this->addContinuIdAtom(wallet, 1);
+
+	return this->atoms;
+}
+
+/**
+ * Appends the ContinuID (I-isotope) atom, mirroring JS Molecule.addContinuIdAtom().
+ * The I-atom is sourced from this->remainderWallet (position/address/bundle) and carries meta
+ * [previousPosition = sourceWallet.position, pubkey (if an ML-KEM key is present), characters].
+ * Falls back to sourceWallet (with no meta) when no remainder wallet is set.
+ *
+ * @param {Wallet} sourceWallet - the signing wallet (supplies previousPosition + the I-atom token)
+ * @param {int} index - the atom index (ContinuID is the trailing atom)
+ */
+void Molecule::addContinuIdAtom(const Wallet &sourceWallet, int index)
+{
+	std::string continuIdPosition = sourceWallet.position;   // fallback when no remainder wallet is set
+	std::string continuIdAddress = sourceWallet.address;
+	std::string continuIdMetaId = sourceWallet.bundle;
 	std::vector<std::pair<std::string, std::string>> continuIdMeta;
 	if (this->remainderWallet != nullptr) {
 		continuIdPosition = this->remainderWallet->position;
 		continuIdAddress = this->remainderWallet->address;
 		continuIdMetaId = this->remainderWallet->bundle;
-		continuIdMeta.push_back({"previousPosition", wallet.position});
+		continuIdMeta.push_back({"previousPosition", sourceWallet.position});
 		if (!this->remainderWallet->mlkem_public_key.empty()) {
 			continuIdMeta.push_back({"pubkey", toBase64(this->remainderWallet->mlkem_public_key)});
 		}
@@ -194,17 +231,71 @@ std::vector<Atom> Molecule::initMeta(const Wallet &wallet, const std::vector<std
 		Atom(continuIdPosition,
 			continuIdAddress,
 			"I",
-			wallet.token,
+			sourceWallet.token,
 			{},  // No value for ContinuID
 			"",  // batchId - empty for ContinuID atoms
 			"walletBundle",
 			continuIdMetaId,
 			continuIdMeta,
 			"",  // otsFragment - will be set during signing
-			1)   // index - second atom gets index 1
+			index)
+	);
+}
+
+/**
+ * Builds Atoms to define a new wallet on the ledger (C isotope + ContinuID), mirroring
+ * JS Molecule.initWalletCreation(wallet, atomMeta).
+ *
+ * @param {Wallet} sourceWallet - the signing wallet
+ * @param {Wallet} wallet - the new wallet being defined on the ledger
+ * @param {Array} atomMeta - optional leading meta (e.g. shadowWalletClaim) prepended before the wallet* keys
+ * @returns {Array}
+ */
+std::vector<Atom> Molecule::initWalletCreation(const Wallet &sourceWallet, const Wallet &wallet, const std::vector<std::pair<std::string, std::string>> &atomMeta)
+{
+	this->molecularHash.clear();
+
+	// Meta = the leading atomMeta (if any) FIRST, then the 7 prefixed wallet* keys
+	// (JS: atomMeta.setMetaWallet(wallet)).
+	auto finalMeta = atomMeta;
+	auto walletKeys = buildWalletMetaKeys(wallet);
+	finalMeta.insert(finalMeta.end(), walletKeys.begin(), walletKeys.end());
+
+	// C-atom: position/address/token from the SOURCE (signing) wallet; metaId from the new wallet.
+	this->atoms.push_back
+	(
+		Atom(sourceWallet.position,
+			sourceWallet.address,
+			"C",
+			sourceWallet.token,
+			"",  // No value for wallet creation
+			"",  // batchId - empty (JS wallet.batchId is null -> hash-skipped)
+			"wallet",
+			wallet.address,
+			finalMeta,
+			"",  // otsFragment - will be set during signing
+			0)   // index - first atom gets index 0
 	);
 
+	// ContinuID atom (I isotope)
+	this->addContinuIdAtom(sourceWallet, 1);
+
 	return this->atoms;
+}
+
+/**
+ * Init shadow wallet claim (C isotope + ContinuID), mirroring JS Molecule.initShadowWalletClaim(wallet):
+ * prepends shadowWalletClaim=1, then delegates to initWalletCreation.
+ *
+ * @param {Wallet} sourceWallet - the signing wallet
+ * @param {Wallet} wallet - the shadow wallet being claimed
+ * @returns {Array}
+ */
+std::vector<Atom> Molecule::initShadowWalletClaim(const Wallet &sourceWallet, const Wallet &wallet)
+{
+	std::vector<std::pair<std::string, std::string>> atomMeta;
+	atomMeta.push_back({"shadowWalletClaim", "1"});
+	return this->initWalletCreation(sourceWallet, wallet, atomMeta);
 }
 
 /**

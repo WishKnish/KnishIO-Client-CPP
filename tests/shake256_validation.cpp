@@ -6,6 +6,8 @@
 #include "../src/utility.h"
 #include "../src/Wallet.h"
 
+using namespace KnishIO;  // Wallet/utility symbols live in the KnishIO namespace
+
 /**
  * SHAKE256 Implementation Validation Test Suite
  * 
