@@ -51,24 +51,24 @@ public:
         std::string expected4 = "b54ff7255705a71ee2925e4a3e30e41a";
         validateTest("SHAKE256('test', 128 bits)", result4, expected4);
         
-        // Test case 5: Different output length - 512 bits
+        // Test case 5: Different output length - 512 bits (canonical, verified via Python hashlib.shake_256)
         std::string result5 = shake256Hex("test", 512);
-        std::string expected5 = "b54ff7255705a71ee2925e4a3e30e41aed489a579d5595e0df13e32e1e4dd20246b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f";
+        std::string expected5 = "b54ff7255705a71ee2925e4a3e30e41aed489a579d5595e0df13e32e1e4dd202a7c7f68b31d6418d9845eb4d757adda6ab189e1bb340db818e5b3bc725d992fa";
         validateTest("SHAKE256('test', 512 bits)", result5, expected5);
-        
-        // Test case 6: Numeric string
+
+        // Test case 6: Numeric string (canonical, verified via Python hashlib.shake_256)
         std::string result6 = shake256Hex("1234567890", 256);
-        std::string expected6 = "3a4e6b9c2d8f1a5e7b4d8f2a6e9c3b7f";
+        std::string expected6 = "cd65a4e553405b50c2f37001ea81905f36d650cc775fdad898b2e343644cb3db";
         validateTest("SHAKE256('1234567890', 256 bits)", result6, expected6);
-        
-        // Test case 7: Special characters  
+
+        // Test case 7: Special characters (canonical, verified via Python hashlib.shake_256)
         std::string result7 = shake256Hex("!@#$%^&*()_+-=[]{}|;:,.<>?", 256);
-        std::string expected7 = "9f8e7d6c5b4a39281f0e9d8c7b6a5948";
+        std::string expected7 = "8886de35388933bf484833dc136909383971078a1622fac48aab735d250ef3fc";
         validateTest("SHAKE256(special chars, 256 bits)", result7, expected7);
-        
-        // Test case 8: Long string
+
+        // Test case 8: Long string (canonical, verified via Python hashlib.shake_256)
         std::string result8 = shake256Hex("Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua", 256);
-        std::string expected8 = "7f8e9d0c1b2a3958647320185764398e2d1c0b9a8f7e6d5c4b3a29180f6e5d4c";
+        std::string expected8 = "d1c8b7f48b5db512eca349ab86ba864cc3ed316deca033d9f44ac38fcc769356";
         validateTest("SHAKE256(long string, 256 bits)", result8, expected8);
     }
     

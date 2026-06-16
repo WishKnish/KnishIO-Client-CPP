@@ -186,11 +186,10 @@ std::string randomString(size_t length, const char *alphabet)
 
 std::vector<unsigned char> shake256(const std::string &str, size_t shake256_bits_size)
 {
-	// Validate input parameters
-	if (str.empty()) {
-		return std::vector<unsigned char>();
-	}
-	
+	// NOTE: empty input is valid — SHAKE256("") is a well-defined canonical value
+	// (46b9dd2b…); FIPS202_SHAKE256(ptr, 0, …) computes it correctly. No empty-input
+	// short-circuit here (it would diverge from JS/Python). No protocol caller hashes
+	// an empty string, so this only affects the empty-input edge case.
 	if (shake256_bits_size == 0 || shake256_bits_size % 8 != 0) {
 		throw std::invalid_argument("SHAKE256 bits size must be positive and divisible by 8");
 	}
