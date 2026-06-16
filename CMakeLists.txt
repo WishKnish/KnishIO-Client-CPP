@@ -145,8 +145,10 @@ set(KNISHIO_HEADERS
     src/third_party/nlohmann/json.hpp
 )
 
-# Create the main library
-add_library(knishio-client-cpp ${KNISHIO_SOURCES})
+# Create the main library (SHARED — the VERSION/SOVERSION properties below imply a .dylib;
+# the SHARED keyword was previously omitted, so it silently built a static .a. The explicit
+# static variant is knishio-client-cpp-static below.)
+add_library(knishio-client-cpp SHARED ${KNISHIO_SOURCES})
 
 # Set library properties
 set_target_properties(knishio-client-cpp PROPERTIES
