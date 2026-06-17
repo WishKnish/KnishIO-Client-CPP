@@ -157,7 +157,13 @@ public:
      * @param enable True to enable verbose logging
      */
     void setVerbose(bool enable);
-    
+
+    /**
+     * Enable or disable TLS certificate verification (disable for self-signed dev validators)
+     * @param verify True (default) verifies the peer + host; false skips verification
+     */
+    void setVerifySSL(bool verify);
+
     /**
      * Check if the client is connected (last request succeeded)
      * @return True if the last request succeeded

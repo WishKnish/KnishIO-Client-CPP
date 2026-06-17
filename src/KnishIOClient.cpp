@@ -38,10 +38,13 @@ public:
         // Initialize HTTP client with first URI
         if (!config.uris.empty()) {
             httpClient = std::make_unique<http::GraphQLClient>(
-                config.uris[0], 
-                config.timeout.count(), 
+                config.uris[0],
+                config.timeout.count(),
                 config.maxRetries
             );
+            if (config.insecureTls) {
+                httpClient->setVerifySSL(false);
+            }
         }
     }
 
@@ -79,6 +82,11 @@ KnishIOClient::Builder& KnishIOClient::Builder::enableLogging(bool enable) {
 
 KnishIOClient::Builder& KnishIOClient::Builder::enableEncryption(bool enable) {
     config_.encrypt = enable;
+    return *this;
+}
+
+KnishIOClient::Builder& KnishIOClient::Builder::insecureTls(bool enable) {
+    config_.insecureTls = enable;
     return *this;
 }
 
@@ -314,12 +322,65 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
         } else if (!hasSecret()) {
             throw KnishIOException("No secret available for authentication");
         }
-        
-        // TODO: Implement authorization request
-        log("INFO", "Requesting authorization token");
-        
-        // Placeholder implementation - return nullptr for now
-        return nullptr;
+        const std::string sec = pImpl_->secret.value();
+
+        // Build the U-isotope authorization molecule. The AUTH source + USER remainder both use
+        // random positions (Wallet default) so re-auth is OTS-safe. U-isotope ProposeMolecule is
+        // PUBLIC (no prior token); the validator extracts the pubkey from the U-atom + issues a
+        // bundle-scoped JWT.
+        Wallet source(sec, "AUTH");
+        Wallet remainder(sec, "USER");
+        const std::string cell = cellSlug.value_or(pImpl_->config.cellSlug.value_or(std::string{}));
+        Molecule mol(cell);
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initAuthorization(source, encrypt);
+        mol.sign(sec);
+
+        // Serialize + strip the validation-context wallets (the validator's MoleculeInput rejects
+        // unknown sourceWallet/remainderWallet fields — toJson emits them when set).
+        nlohmann::json moleculeJson = nlohmann::json::parse(mol.toJson());
+        moleculeJson.erase("sourceWallet");
+        moleculeJson.erase("remainderWallet");
+
+        static const std::string PROPOSE_MOLECULE =
+            "mutation ProposeMolecule($molecule: MoleculeInput!) {"
+            " ProposeMolecule(molecule: $molecule) {"
+            " molecularHash status reason payload createdAt } }";
+        nlohmann::json variables;
+        variables["molecule"] = moleculeJson;
+
+        log("INFO", "Requesting authorization token (molecular hash: " + mol.molecularHash + ")");
+
+        auto httpResp = pImpl_->httpClient->mutate(PROPOSE_MOLECULE, variables).get();
+
+        auto result = std::make_unique<response::ResponseRequestAuthorization>();
+        if (!httpResp.isSuccess()) {
+            result->setError("Authorization request failed (HTTP " + std::to_string(httpResp.statusCode) + ")");
+            return result;
+        }
+
+        nlohmann::json body = nlohmann::json::parse(httpResp.body);
+        result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
+
+        // Extract the JWT from data.ProposeMolecule.payload (a stringified JSON) -> token, and set
+        // it on the client + the http transport (so subsequent ops carry the X-Auth-Token header).
+        if (body.contains("data") && body["data"].contains("ProposeMolecule")) {
+            const auto& pm = body["data"]["ProposeMolecule"];
+            if (pm.contains("payload") && pm["payload"].is_string()) {
+                try {
+                    nlohmann::json payload = nlohmann::json::parse(pm["payload"].get<std::string>());
+                    if (payload.contains("token") && payload["token"].is_string()) {
+                        const std::string jwt = payload["token"].get<std::string>();
+                        pImpl_->authToken = jwt;
+                        pImpl_->httpClient->setAuthToken(jwt);
+                    }
+                } catch (const std::exception&) {
+                    // payload not parseable (e.g. a rejected molecule) -> leave authToken unset
+                }
+            }
+        }
+        return result;
     });
 }
 

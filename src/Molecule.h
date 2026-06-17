@@ -21,6 +21,7 @@ public:
 	std::vector<Atom> initMeta(const Wallet &wallet, const std::vector<std::pair<std::string, std::string>> &meta, const std::string &metaType, const std::string &metaId);
 	std::vector<Atom> initWalletCreation(const Wallet &sourceWallet, const Wallet &wallet, const std::vector<std::pair<std::string, std::string>> &atomMeta = {});
 	std::vector<Atom> initShadowWalletClaim(const Wallet &sourceWallet, const Wallet &wallet);
+	std::vector<Atom> initAuthorization(const Wallet &sourceWallet, bool encrypt = false);
 
 	std::string sign(const std::string &secret, bool anonymous = false);
 

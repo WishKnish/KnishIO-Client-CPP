@@ -61,6 +61,7 @@ public:
         int serverSdkVersion = 3;                         ///< Server SDK version compatibility
         bool logging = false;                             ///< Enable debug logging
         bool encrypt = false;                             ///< Enable encryption for communications
+        bool insecureTls = false;                         ///< Skip TLS cert verification (dev/self-signed validators)
         std::chrono::milliseconds timeout{30000};         ///< Request timeout
         int maxRetries = 3;                              ///< Maximum retry attempts
         std::chrono::milliseconds retryDelay{1000};      ///< Delay between retries
@@ -76,6 +77,7 @@ public:
         Builder& serverSdkVersion(int version);
         Builder& enableLogging(bool enable = true);
         Builder& enableEncryption(bool enable = true);
+        Builder& insecureTls(bool enable = true);
         Builder& timeout(std::chrono::milliseconds timeout);
         Builder& maxRetries(int retries);
         Builder& retryDelay(std::chrono::milliseconds delay);

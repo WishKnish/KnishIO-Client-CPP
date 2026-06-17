@@ -20,7 +20,8 @@ public:
     std::optional<std::string> authToken;
     std::unordered_map<std::string, std::string> customHeaders;
     bool verbose = false;
-    
+    bool verifySSL = true;  /* false allows self-signed dev validators */
+
     // Statistics
     mutable std::mutex statsMutex;
     std::atomic<size_t> totalRequests{0};
@@ -241,9 +242,10 @@ void GraphQLClient::setupRequestHeaders(CURL* curl, const Request& request) {
     headers = curl_slist_append(headers, "Content-Type: application/json");
     headers = curl_slist_append(headers, "Accept: application/json");
     
-    // Add authorization token if present
+    // Add authorization token if present (the validator reads the X-Auth-Token header,
+    // not Authorization: Bearer — matches the JS/TS/all-SDK convention).
     if (pImpl_->authToken.has_value()) {
-        std::string authHeader = "Authorization: Bearer " + pImpl_->authToken.value();
+        std::string authHeader = "X-Auth-Token: " + pImpl_->authToken.value();
         headers = curl_slist_append(headers, authHeader.c_str());
     }
     
@@ -302,9 +304,9 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
     
-    // SSL/TLS options
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    // SSL/TLS options (verifySSL=false allows self-signed dev validators)
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, pImpl_->verifySSL ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, pImpl_->verifySSL ? 2L : 0L);
     
     // Set headers
     setupRequestHeaders(curl, request);
@@ -373,6 +375,10 @@ void GraphQLClient::setRetryConfig(const RetryConfig& config) {
 
 void GraphQLClient::setVerbose(bool enable) {
     pImpl_->verbose = enable;
+}
+
+void GraphQLClient::setVerifySSL(bool verify) {
+    pImpl_->verifySSL = verify;
 }
 
 bool GraphQLClient::isConnected() const noexcept {

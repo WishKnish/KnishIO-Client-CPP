@@ -201,6 +201,49 @@ std::vector<Atom> Molecule::initMeta(const Wallet &wallet, const std::vector<std
 }
 
 /**
+ * Builds Atoms to request an authorization token (U isotope + ContinuID), mirroring JS
+ * Molecule.initAuthorization(). The U-atom carries meta [encrypt, pubkey, characters]; the
+ * validator extracts the pubkey from the U-atom's walletAddress and issues a bundle-scoped JWT
+ * (U-isotope is OTS-exempt at the validator, but the molecular hash is still verified).
+ *
+ * @param {Wallet} sourceWallet - the signing (AUTH) wallet
+ * @param {bool} encrypt - whether the session requests encrypted communications
+ */
+std::vector<Atom> Molecule::initAuthorization(const Wallet &sourceWallet, bool encrypt)
+{
+	this->molecularHash.clear();
+
+	// U-atom meta in JS order: encrypt first, then pubkey + characters (setAtomWallet).
+	std::vector<std::pair<std::string, std::string>> uMeta;
+	uMeta.push_back({"encrypt", encrypt ? "true" : "false"});
+	if (!sourceWallet.mlkem_public_key.empty()) {
+		uMeta.push_back({"pubkey", toBase64(sourceWallet.mlkem_public_key)});
+	}
+	uMeta.push_back({"characters", "BASE64"});
+
+	// Authorization atom (U isotope) — no value, no metaType/metaId.
+	this->atoms.push_back
+	(
+		Atom(sourceWallet.position,
+			sourceWallet.address,
+			"U",
+			sourceWallet.token,
+			{},  // No value
+			"",  // batchId - empty
+			"",  // metaType - none for U-isotope
+			"",  // metaId - none for U-isotope
+			uMeta,
+			"",  // otsFragment - will be set during signing
+			0)   // index - first atom gets index 0
+	);
+
+	// ContinuID atom (I isotope) — mirrors JS addContinuIdAtom().
+	this->addContinuIdAtom(sourceWallet, 1);
+
+	return this->atoms;
+}
+
+/**
  * Appends the ContinuID (I-isotope) atom, mirroring JS Molecule.addContinuIdAtom().
  * The I-atom is sourced from this->remainderWallet (position/address/bundle) and carries meta
  * [previousPosition = sourceWallet.position, pubkey (if an ML-KEM key is present), characters].
