@@ -251,46 +251,122 @@ Molecule* KnishIOClient::createMolecule(
     return molecule;
 }
 
+// Sign + submit a molecule via ProposeMolecule (sync; reused by proposeMolecule + the token ops).
+// Serializes + strips the validation-context wallets the validator's MoleculeInput rejects.
+std::unique_ptr<response::ResponseProposeMolecule>
+KnishIOClient::submitMolecule(KnishIO::Molecule& mol) {
+    if (!hasSecret()) {
+        throw KnishIOException("No secret available for signing molecule");
+    }
+
+    mol.sign(pImpl_->secret.value());
+    if (!Molecule::verify(mol)) {
+        throw KnishIOException("Molecule validation failed");
+    }
+
+    nlohmann::json moleculeJson = nlohmann::json::parse(mol.toJson());
+    moleculeJson.erase("sourceWallet");
+    moleculeJson.erase("remainderWallet");
+
+    static const std::string PROPOSE_MOLECULE =
+        "mutation ProposeMolecule($molecule: MoleculeInput!) {"
+        " ProposeMolecule(molecule: $molecule) {"
+        " molecularHash status reason payload createdAt } }";
+    nlohmann::json variables;
+    variables["molecule"] = moleculeJson;
+
+    log("INFO", "Proposing molecule with hash: " + mol.molecularHash);
+
+    auto httpResp = pImpl_->httpClient->mutate(PROPOSE_MOLECULE, variables).get();
+
+    auto result = std::make_unique<response::ResponseProposeMolecule>();
+    if (!httpResp.isSuccess()) {
+        result->setError("Molecule proposal failed (HTTP " + std::to_string(httpResp.statusCode) + ")");
+        return result;
+    }
+    nlohmann::json body = nlohmann::json::parse(httpResp.body);
+    result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
+    return result;
+}
+
+// Resolve a bundle's live on-ledger ContinuID position (the chain head a non-U molecule must sign
+// at). Queries the PUBLIC ContinuId(bundle, "USER"); returns the 64-char position, or "" for a
+// genesis bundle (no ContinuID yet -> the caller falls back to a fresh random position).
+std::string KnishIOClient::resolveContinuIdPosition(const std::string& bundle) {
+    static const std::string CONTINUID_QUERY =
+        "query ContinuId($bundle: String, $token: String) {"
+        " ContinuId(bundle: $bundle, token: $token) {"
+        " position address tokenSlug bundleHash pubkey characters } }";
+    nlohmann::json variables;
+    variables["bundle"] = bundle;
+    variables["token"] = "USER";
+    try {
+        auto httpResp = pImpl_->httpClient->query(CONTINUID_QUERY, variables).get();
+        if (httpResp.isSuccess()) {
+            nlohmann::json body = nlohmann::json::parse(httpResp.body);
+            if (body.contains("data") && body["data"].contains("ContinuId")
+                && body["data"]["ContinuId"].is_object()) {
+                const auto& cid = body["data"]["ContinuId"];
+                if (cid.contains("position") && cid["position"].is_string()) {
+                    std::string pos = cid["position"].get<std::string>();
+                    if (pos.size() == 64) {
+                        return pos;
+                    }
+                }
+            }
+        }
+    } catch (const std::exception&) {
+        // fall through to genesis (empty position)
+    }
+    return {};
+}
+
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::proposeMolecule(Molecule* molecule,
                               const std::optional<std::string>& queryUri) {
-    // Take ownership of the molecule using unique_ptr
     std::unique_ptr<Molecule> mol(molecule);
-    
-    return std::async(std::launch::async, [this, mol = std::move(mol), queryUri]() -> std::unique_ptr<response::ResponseProposeMolecule> {
-        // Sign molecule with secret before proposing
-        if (!hasSecret()) {
-            throw KnishIOException("No secret available for signing molecule");
-        }
-        
-        mol->sign(pImpl_->secret.value());
-        
-        // Verify molecule is valid
-        if (!Molecule::verify(*mol)) {
-            throw KnishIOException("Molecule validation failed");
-        }
-        
-        // TODO: Implement MutationProposeMolecule when mutation classes are ready
-        log("INFO", "Proposing molecule with hash: " + mol->molecularHash);
-        
-        // Placeholder implementation - return nullptr for now
-        return nullptr;
+    (void)queryUri;
+    return std::async(std::launch::async, [this, mol = std::move(mol)]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        return submitMolecule(*mol);
     });
 }
 
 // Token operations
 std::future<std::unique_ptr<response::ResponseCreateToken>>
-KnishIOClient::createToken(const std::string& token, 
+KnishIOClient::createToken(const std::string& token,
                           double amount,
                           const std::unordered_map<std::string, std::string>& meta) {
     return std::async(std::launch::async, [this, token, amount, meta]() -> std::unique_ptr<response::ResponseCreateToken> {
         ensureAuthenticated();
-        
-        // TODO: Implement token creation via molecule
-        log("INFO", "Creating token: " + token + " with amount: " + std::to_string(amount));
-        
-        // Placeholder implementation - return nullptr for now
-        return nullptr;
+        const std::string sec = pImpl_->secret.value();
+
+        // The SOURCE signs at the bundle's LIVE ContinuID position (else the validator rejects
+        // "ContinuID chain validation failed"). The recipient is the new token's wallet; the
+        // remainder is a fresh chain head (the relay race).
+        const std::string bundle = getBundle();
+        const std::string livePos = resolveContinuIdPosition(bundle);
+        Wallet source(sec, "USER", livePos);   // livePos == "" -> fresh random (genesis)
+        Wallet recipient(sec, token);          // new-token wallet, fresh random position
+        Wallet remainder(sec, "USER");         // fresh random remainder
+
+        std::vector<std::pair<std::string, std::string>> tokenMeta;
+        tokenMeta.reserve(meta.size());
+        for (const auto& [k, v] : meta) {
+            tokenMeta.push_back({k, v});
+        }
+
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initTokenCreation(source, recipient, std::to_string(static_cast<long long>(amount)), tokenMeta);
+
+        log("INFO", "Creating token: " + token + " amount: " + std::to_string(amount));
+
+        auto proposeResp = submitMolecule(mol);
+
+        auto result = std::make_unique<response::ResponseCreateToken>();
+        result->setData(proposeResp->getData());
+        return result;
     });
 }
 

@@ -275,6 +275,11 @@ private:
     void log(const std::string& level, const std::string& message) const;
     void ensureAuthenticated() const;
     void validateConfig() const;
+
+    // Live-wiring helpers (slice 4): sign + submit a molecule via ProposeMolecule, and resolve a
+    // bundle's live on-ledger ContinuID position so a non-U molecule signs at the chain head.
+    [[nodiscard]] std::unique_ptr<response::ResponseProposeMolecule> submitMolecule(KnishIO::Molecule& mol);
+    [[nodiscard]] std::string resolveContinuIdPosition(const std::string& bundle);
 };
 
 } // namespace knishio

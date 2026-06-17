@@ -257,11 +257,17 @@ void Molecule::addContinuIdAtom(const Wallet &sourceWallet, int index)
 	std::string continuIdPosition = sourceWallet.position;   // fallback when no remainder wallet is set
 	std::string continuIdAddress = sourceWallet.address;
 	std::string continuIdMetaId = sourceWallet.bundle;
+	std::string continuIdToken = sourceWallet.token;         // fallback (genesis / no remainder)
 	std::vector<std::pair<std::string, std::string>> continuIdMeta;
 	if (this->remainderWallet != nullptr) {
 		continuIdPosition = this->remainderWallet->position;
 		continuIdAddress = this->remainderWallet->address;
 		continuIdMetaId = this->remainderWallet->bundle;
+		// JS: the ContinuID I-atom IS the remainder (USER) wallet — use ITS token, not the
+		// source's. Hash-neutral for the self-test (source+remainder are both USER), but for a
+		// non-USER source (e.g. the AUTH auth molecule) this registers the ContinuID chain under
+		// USER so the next molecule's ContinuId(bundle,"USER") lookup finds it.
+		continuIdToken = this->remainderWallet->token;
 		continuIdMeta.push_back({"previousPosition", sourceWallet.position});
 		if (!this->remainderWallet->mlkem_public_key.empty()) {
 			continuIdMeta.push_back({"pubkey", toBase64(this->remainderWallet->mlkem_public_key)});
@@ -274,7 +280,7 @@ void Molecule::addContinuIdAtom(const Wallet &sourceWallet, int index)
 		Atom(continuIdPosition,
 			continuIdAddress,
 			"I",
-			sourceWallet.token,
+			continuIdToken,
 			{},  // No value for ContinuID
 			"",  // batchId - empty for ContinuID atoms
 			"walletBundle",

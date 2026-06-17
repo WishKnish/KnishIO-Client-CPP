@@ -67,9 +67,13 @@ void ResponseContinuId::parseData() {
 
 // ResponseCreateToken implementation
 bool ResponseCreateToken::isCreated() const {
-    return data.contains("CreateToken") && 
-           data["CreateToken"].contains("success") && 
-           data["CreateToken"]["success"] == true;
+    // createToken submits a ProposeMolecule (C-isotope token-creation), so the response is
+    // ProposeMolecule-shaped — success == the molecule was accepted by the ledger.
+    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("status")) {
+        const std::string status = data["ProposeMolecule"]["status"];
+        return status == "accepted" || status == "success";
+    }
+    return false;
 }
 
 std::string ResponseCreateToken::getTokenSlug() const {
