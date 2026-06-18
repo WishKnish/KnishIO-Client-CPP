@@ -589,18 +589,12 @@ bool Molecule::verify(const Molecule &molecule)
 
 	try {
 		tokenValid = verifyTokenIsotopeV(molecule);
-	} catch (const std::exception& e) {
-		std::cerr << "  ⚠️  verifyTokenIsotopeV() threw exception: " << e.what() << std::endl;
+	} catch (const std::exception&) {
 		tokenValid = false;
 	}
 
-	// For cross-SDK compatibility: Hash validation proves integrity
-	// OTS verification skipped (requires sender's wallet, not available cross-platform)
-	std::cerr << "  Validation (cross-SDK mode):" << std::endl;
-	std::cerr << "    Hash valid:  " << (hashValid ? "✅" : "❌") << std::endl;
-	std::cerr << "    Token valid: " << (tokenValid ? "✅" : "❌") << std::endl;
-	std::cerr << "    OTS:         ⏭️  SKIPPED (cross-platform)" << std::endl;
-
+	// For cross-SDK compatibility: hash + token-balance validation proves integrity.
+	// OTS verification is skipped (requires the sender's wallet, not available cross-platform).
 	return hashValid && tokenValid;
 }
 
@@ -616,18 +610,7 @@ bool Molecule::verifyMolecularHash(const Molecule &molecule)
 	{
 		auto atomicHash = Atom::hashAtomsBase17(molecule.atoms);
 
-		bool matches = (atomicHash == molecule.molecularHash);
-
-		// Debug logging for hash comparison
-		if (!matches) {
-			std::cerr << "  ⚠️  Hash mismatch detected:" << std::endl;
-			std::cerr << "    Expected:   " << molecule.molecularHash << std::endl;
-			std::cerr << "    Calculated: " << atomicHash << std::endl;
-		} else {
-			std::cerr << "  ✅ Hash match: " << atomicHash << std::endl;
-		}
-
-		return matches;
+		return (atomicHash == molecule.molecularHash);
 	}
 
 	return false;

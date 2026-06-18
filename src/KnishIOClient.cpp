@@ -204,30 +204,70 @@ KnishIOClient::queryBalance(const std::string& token,
     });
 }
 
-std::future<std::unique_ptr<response::ResponseWalletList>> 
+std::future<std::unique_ptr<response::ResponseWalletList>>
 KnishIOClient::queryWallets(const std::optional<std::string>& bundle,
                            const std::optional<std::string>& token) {
     return std::async(std::launch::async, [this, bundle, token]() -> std::unique_ptr<response::ResponseWalletList> {
         ensureAuthenticated();
-        
-        // TODO: Implement QueryWalletList when query classes are ready
-        log("INFO", "Querying wallet list");
-        
-        // Placeholder implementation - return nullptr for now
-        return nullptr;
+        const std::string b = bundle.value_or(getBundle());
+        log("INFO", "Querying wallet list for bundle: " + b);
+
+        // Validator: wallets(bundleHash, limit, offset) -> [Wallet]. No server-side token filter;
+        // callers filter the returned list by token if needed.
+        (void)token;
+        static const std::string WALLETS_QUERY =
+            "query Wallets($bundleHash: String!, $limit: Int, $offset: Int) {"
+            " wallets(bundleHash: $bundleHash, limit: $limit, offset: $offset) {"
+            " address bundleHash tokenSlug position pubkey balance amount batchId } }";
+        nlohmann::json variables;
+        variables["bundleHash"] = b;
+        variables["limit"] = 100;
+        variables["offset"] = 0;
+
+        auto result = std::make_unique<response::ResponseWalletList>();
+        try {
+            auto httpResp = pImpl_->httpClient->query(WALLETS_QUERY, variables).get();
+            if (httpResp.isSuccess()) {
+                nlohmann::json body = nlohmann::json::parse(httpResp.body);
+                result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
+                result->parseData();
+            } else {
+                result->setError("Wallets query failed (HTTP " + std::to_string(httpResp.statusCode) + ")");
+            }
+        } catch (const std::exception& e) {
+            result->setError(std::string("Wallets query error: ") + e.what());
+        }
+        return result;
     });
 }
 
-std::future<std::unique_ptr<response::ResponseContinuId>> 
+std::future<std::unique_ptr<response::ResponseContinuId>>
 KnishIOClient::queryContinuId(const std::string& bundle) {
     return std::async(std::launch::async, [this, bundle]() -> std::unique_ptr<response::ResponseContinuId> {
-        // ContinuId queries don't require authentication
-        
-        // TODO: Implement QueryContinuId when query classes are ready
+        // ContinuId queries don't require authentication (PUBLIC on the validator).
+        static const std::string CONTINUID_QUERY =
+            "query ContinuId($bundle: String, $token: String) {"
+            " ContinuId(bundle: $bundle, token: $token) {"
+            " position address tokenSlug bundleHash pubkey characters } }";
+        nlohmann::json variables;
+        variables["bundle"] = bundle;
+        variables["token"] = "USER";
         log("INFO", "Querying ContinuID for bundle: " + bundle);
-        
-        // Placeholder implementation - return nullptr for now
-        return nullptr;
+
+        auto result = std::make_unique<response::ResponseContinuId>();
+        try {
+            auto httpResp = pImpl_->httpClient->query(CONTINUID_QUERY, variables).get();
+            if (httpResp.isSuccess()) {
+                nlohmann::json body = nlohmann::json::parse(httpResp.body);
+                result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
+                result->parseData();
+            } else {
+                result->setError("ContinuId query failed (HTTP " + std::to_string(httpResp.statusCode) + ")");
+            }
+        } catch (const std::exception& e) {
+            result->setError(std::string("ContinuId query error: ") + e.what());
+        }
+        return result;
     });
 }
 

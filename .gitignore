@@ -293,5 +293,14 @@ libknishio-client-cpp.*
 knishio_config.h
 config.h
 
+### CMake build directory (generated; knishio_config.h regenerates on configure)
+build/
+
+### Local throwaway diagnostics + scratch at repo root (not for commit)
+/test_*
+/diagnose_*
+/external/
+/shared-test-results/
+
 # macOS
 **/.DS_Store

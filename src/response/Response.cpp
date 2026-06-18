@@ -20,12 +20,19 @@ void ResponseBalance::parseData() {
         if (balanceData.contains("position")) b.position = balanceData["position"];
         if (balanceData.contains("batchId")) b.batchId = balanceData["batchId"];
         
-        if (balanceData.contains("characters") && balanceData["characters"].is_array()) {
-            for (const auto& ch : balanceData["characters"]) {
-                b.characters.push_back(ch);
+        // The validator returns `characters` as a single String (e.g. "BASE64"); tolerate an
+        // array shape too for older producers.
+        if (balanceData.contains("characters")) {
+            const auto& chars = balanceData["characters"];
+            if (chars.is_string()) {
+                b.characters.push_back(chars.get<std::string>());
+            } else if (chars.is_array()) {
+                for (const auto& ch : chars) {
+                    if (ch.is_string()) b.characters.push_back(ch.get<std::string>());
+                }
             }
         }
-        
+
         balance = b;
     }
 }
@@ -33,18 +40,32 @@ void ResponseBalance::parseData() {
 // ResponseWalletList implementation
 void ResponseWalletList::parseData() {
     wallets.clear();
-    
-    if (data.contains("WalletList") && data["WalletList"].is_array()) {
-        for (const auto& walletData : data["WalletList"]) {
+
+    // The validator query is `wallets(bundleHash) -> [Wallet]`; tolerate the older "WalletList" key.
+    const char* key = data.contains("wallets") ? "wallets"
+                    : (data.contains("WalletList") ? "WalletList" : nullptr);
+    if (key && data[key].is_array()) {
+        for (const auto& walletData : data[key]) {
             Wallet w;
-            
-            if (walletData.contains("address")) w.address = walletData["address"];
-            if (walletData.contains("bundleHash")) w.bundleHash = walletData["bundleHash"];
-            if (walletData.contains("token")) w.token = walletData["token"];
-            if (walletData.contains("position")) w.position = walletData["position"];
-            if (walletData.contains("pubkey")) w.pubkey = walletData["pubkey"];
-            if (walletData.contains("balance")) w.balance = walletData["balance"];
-            
+
+            if (walletData.contains("address") && walletData["address"].is_string())
+                w.address = walletData["address"].get<std::string>();
+            if (walletData.contains("bundleHash") && walletData["bundleHash"].is_string())
+                w.bundleHash = walletData["bundleHash"].get<std::string>();
+            // Validator returns `tokenSlug`; tolerate `token`.
+            if (walletData.contains("tokenSlug") && walletData["tokenSlug"].is_string())
+                w.token = walletData["tokenSlug"].get<std::string>();
+            else if (walletData.contains("token") && walletData["token"].is_string())
+                w.token = walletData["token"].get<std::string>();
+            if (walletData.contains("position") && walletData["position"].is_string())
+                w.position = walletData["position"].get<std::string>();
+            if (walletData.contains("pubkey") && walletData["pubkey"].is_string())
+                w.pubkey = walletData["pubkey"].get<std::string>();
+            if (walletData.contains("balance") && walletData["balance"].is_string())
+                w.balance = walletData["balance"].get<std::string>();
+            else if (walletData.contains("amount") && walletData["amount"].is_string())
+                w.balance = walletData["amount"].get<std::string>();
+
             wallets.push_back(w);
         }
     }
@@ -52,15 +73,19 @@ void ResponseWalletList::parseData() {
 
 // ResponseContinuId implementation
 void ResponseContinuId::parseData() {
-    if (data.contains("ContinuId") && !data["ContinuId"].is_null()) {
+    if (data.contains("ContinuId") && data["ContinuId"].is_object()) {
         ContinuID c;
-        auto continuData = data["ContinuId"];
-        
-        if (continuData.contains("bundle")) c.bundle = continuData["bundle"];
-        if (continuData.contains("position")) c.position = continuData["position"];
-        if (continuData.contains("walletAddress")) c.walletAddress = continuData["walletAddress"];
-        if (continuData.contains("timestamp")) c.timestamp = continuData["timestamp"];
-        
+        const auto& continuData = data["ContinuId"];
+
+        // Validator ContinuId returns: position, address, tokenSlug, bundleHash, pubkey, characters.
+        if (continuData.contains("position") && continuData["position"].is_string())
+            c.position = continuData["position"].get<std::string>();
+        if (continuData.contains("address") && continuData["address"].is_string())
+            c.walletAddress = continuData["address"].get<std::string>();
+        if (continuData.contains("bundleHash") && continuData["bundleHash"].is_string())
+            c.bundle = continuData["bundleHash"].get<std::string>();
+        // (the validator does not return a timestamp for ContinuId)
+
         continuId = c;
     }
 }

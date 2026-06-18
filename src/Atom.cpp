@@ -4,7 +4,6 @@
 #include "third_party/Keccak/Keccak.h"
 #include "utility.h"
 #include <array>
-#include <iostream>
 
 using namespace std::chrono;
 
@@ -155,89 +154,43 @@ std::vector<unsigned char> Atom::hashAtoms(const std::vector<Atom> &atoms)
 {
 	std::string molecularSponge;
 
-	std::cerr << "\n🔍 DEBUG: Hashing " << atoms.size() << " atoms" << std::endl;
-
-	for (size_t atomIdx = 0; atomIdx < atoms.size(); atomIdx++)
+	for (const auto &atom : atoms)
 	{
-		const auto &atom = atoms[atomIdx];
-		std::cerr << "\n  Atom[" << atomIdx << "] " << atom.isotope << ":" << std::endl;
+		// Number of atoms (appended per atom — matches JavaScript/C logic)
+		molecularSponge.append(std::to_string(atoms.size()));
 
-		// Add number of atoms (matching JavaScript/C logic - added for each atom)
-		std::string atomCount = std::to_string(atoms.size());
-		molecularSponge.append(atomCount);
-		std::cerr << "    numberOfAtoms: " << atomCount << std::endl;
-
-		// Add position (required field)
+		// Required fields
 		molecularSponge.append(atom.position);
-		std::cerr << "    position: " << atom.position.substr(0, 16) << "..." << std::endl;
-
-		// Add wallet address (required field)
 		molecularSponge.append(atom.walletAddress);
-		std::cerr << "    walletAddress: " << atom.walletAddress.substr(0, 16) << "..." << std::endl;
-
-		// Add isotope (required field)
 		molecularSponge.append(atom.isotope);
-		std::cerr << "    isotope: " << atom.isotope << std::endl;
 
-		// Add token only if not empty (matching JavaScript/C logic)
+		// Optional fields — appended only when non-empty (matches JavaScript/C logic)
 		if (!atom.token.empty()) {
 			molecularSponge.append(atom.token);
-			std::cerr << "    token: " << atom.token << std::endl;
-		} else {
-			std::cerr << "    token: SKIPPED (empty)" << std::endl;
 		}
-
-		// Add value only if not empty (matching JavaScript/C logic)
 		if (!atom.value.empty()) {
 			molecularSponge.append(atom.value);
-			std::cerr << "    value: " << atom.value << std::endl;
-		} else {
-			std::cerr << "    value: SKIPPED (empty)" << std::endl;
 		}
-
-		// Add batchId only if not empty (matching JavaScript/C logic)
 		if (!atom.batchId.empty()) {
 			molecularSponge.append(atom.batchId);
-			std::cerr << "    batchId: " << atom.batchId << std::endl;
-		} else {
-			std::cerr << "    batchId: SKIPPED (empty)" << std::endl;
 		}
-
-		// Add metaType only if not empty (matching JavaScript/C logic)
 		if (!atom.metaType.empty()) {
 			molecularSponge.append(atom.metaType);
-			std::cerr << "    metaType: " << atom.metaType << std::endl;
-		} else {
-			std::cerr << "    metaType: SKIPPED (empty)" << std::endl;
 		}
-
-		// Add metaId only if not empty (matching JavaScript/C logic)
 		if (!atom.metaId.empty()) {
 			molecularSponge.append(atom.metaId);
-			std::cerr << "    metaId: " << atom.metaId << std::endl;
-		} else {
-			std::cerr << "    metaId: SKIPPED (empty)" << std::endl;
 		}
 
-		// Add meta key/value pairs (matching JavaScript/C logic)
-		// JavaScript checks: typeof value !== 'undefined' && value !== null
-		// C++ std::string is never undefined or null, so always add all meta pairs
+		// Meta key/value pairs (every pair, even empty values — matches JavaScript/C logic)
 		for (const auto &meta : atom.meta)
 		{
-			molecularSponge.append(meta.first); // key
-			molecularSponge.append(meta.second); // value (even if empty string)
-			std::cerr << "    meta[" << meta.first << "]: "
-			          << (meta.second.empty() ? "(empty string)" : meta.second)
-			          << std::endl;
+			molecularSponge.append(meta.first);   // key
+			molecularSponge.append(meta.second);  // value (even if empty string)
 		}
 
-		// Add createdAt (required field)
-		std::string createdAtStr = std::to_string(atom.createdAt.count());
-		molecularSponge.append(createdAtStr);
-		std::cerr << "    createdAt: " << createdAtStr << std::endl;
+		// createdAt (required field)
+		molecularSponge.append(std::to_string(atom.createdAt.count()));
 	}
-
-	std::cerr << "\n  Total sponge length: " << molecularSponge.length() << " bytes" << std::endl;
 
 	return shake256(molecularSponge, 256);
 }
