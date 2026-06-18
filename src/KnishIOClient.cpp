@@ -175,17 +175,32 @@ std::string KnishIOClient::getBundle() const {
 }
 
 // Wallet operations
-std::future<std::unique_ptr<response::ResponseBalance>> 
-KnishIOClient::queryBalance(const std::string& token, 
+std::future<std::unique_ptr<response::ResponseBalance>>
+KnishIOClient::queryBalance(const std::string& token,
                            const std::optional<std::string>& bundle) {
     return std::async(std::launch::async, [this, token, bundle]() -> std::unique_ptr<response::ResponseBalance> {
         ensureAuthenticated();
-        
-        // TODO: Implement QueryBalance when query classes are ready
+        const std::string b = bundle.value_or(getBundle());
         log("INFO", "Querying balance for token: " + token);
-        
-        // Placeholder implementation - return nullptr for now
-        return nullptr;
+
+        // Resolve the on-ledger token wallet, then wrap it into the Balance shape that
+        // ResponseBalance::parseData expects (data["Balance"].{position,address,amount,...}).
+        TokenWalletInfo tw = resolveTokenWallet(b, token);
+
+        auto result = std::make_unique<response::ResponseBalance>();
+        if (tw.found) {
+            nlohmann::json balanceData;
+            balanceData["Balance"] = {
+                {"position", tw.position},
+                {"address", tw.address},
+                {"amount", tw.balance},
+                {"tokenSlug", token},
+                {"bundleHash", b}
+            };
+            result->setData(balanceData);
+            result->parseData();
+        }
+        return result;
     });
 }
 
@@ -321,6 +336,50 @@ std::string KnishIOClient::resolveContinuIdPosition(const std::string& bundle) {
     return {};
 }
 
+// Resolve a bundle's live on-ledger token wallet via the PUBLIC Balance query — the spendable
+// source for a value transfer. The validator's Balance(bundleHash, token) returns the highest-
+// balance NON-shadow wallet (address + position present) with its amount. found=false when the
+// bundle holds no spendable wallet for the token. Mirrors resolveContinuIdPosition's inline style.
+// The position/balance MUST come from the validator: createToken registered the token wallet at a
+// random position (not recoverable client-side), and the V-isotope signer must sign at that
+// registered position.
+KnishIOClient::TokenWalletInfo
+KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& token) {
+    static const std::string BALANCE_QUERY =
+        "query($bundleHash: String, $token: String) {"
+        " Balance(bundleHash: $bundleHash, token: $token) {"
+        " position address tokenSlug amount pubkey batchId bundleHash } }";
+    nlohmann::json variables;
+    variables["bundleHash"] = bundle;
+    variables["token"] = token;
+
+    TokenWalletInfo info;
+    try {
+        auto httpResp = pImpl_->httpClient->query(BALANCE_QUERY, variables).get();
+        if (httpResp.isSuccess()) {
+            nlohmann::json body = nlohmann::json::parse(httpResp.body);
+            if (body.contains("data") && body["data"].contains("Balance")
+                && body["data"]["Balance"].is_object()) {
+                const auto& bal = body["data"]["Balance"];
+                if (bal.contains("position") && bal["position"].is_string()) {
+                    info.position = bal["position"].get<std::string>();
+                }
+                if (bal.contains("address") && bal["address"].is_string()) {
+                    info.address = bal["address"].get<std::string>();
+                }
+                if (bal.contains("amount") && bal["amount"].is_string()) {
+                    info.balance = bal["amount"].get<std::string>();
+                }
+                // A spendable (non-shadow) source must have a real position + address.
+                info.found = !info.position.empty() && !info.address.empty();
+            }
+        }
+    } catch (const std::exception&) {
+        // fall through: found stays false
+    }
+    return info;
+}
+
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::proposeMolecule(Molecule* molecule,
                               const std::optional<std::string>& queryUri) {
@@ -414,19 +473,56 @@ KnishIOClient::claimShadowWallet(const std::string& token, const std::string& ba
     });
 }
 
-std::future<std::unique_ptr<response::ResponseTransferTokens>>
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::transferToken(const std::string& bundleHash,
                             const std::string& token,
-                            double amount) {
-    return std::async(std::launch::async, [this, bundleHash, token, amount]() -> std::unique_ptr<response::ResponseTransferTokens> {
+                            double amount,
+                            const std::string& batchId) {
+    return std::async(std::launch::async, [this, bundleHash, token, amount, batchId]() -> std::unique_ptr<response::ResponseProposeMolecule> {
         ensureAuthenticated();
-        
-        // TODO: Implement token transfer via molecule
-        log("INFO", "Transferring " + std::to_string(amount) + " " + token + 
-            " to " + bundleHash);
-        
-        // Placeholder implementation - return nullptr for now
-        return nullptr;
+        const std::string sec = pImpl_->secret.value();
+        const std::string senderBundle = getBundle();
+
+        // 1. SOURCE: the bundle's on-ledger token wallet. Its position + balance come from the
+        //    validator's Balance query (createToken registered it at a random position; the
+        //    V-isotope signer must sign at that registered position).
+        TokenWalletInfo src = resolveTokenWallet(senderBundle, token);
+        if (!src.found) {
+            throw KnishIOException("No spendable wallet for token " + token);
+        }
+        const long long amountLL = static_cast<long long>(amount);
+        long long srcBalance = 0;
+        try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
+        if (srcBalance < amountLL) {
+            throw KnishIOException("Insufficient balance for token " + token);
+        }
+
+        Wallet source(sec, token, src.position);  // re-derives the registered address from secret+token+position
+        source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
+
+        // 2. RECIPIENT: a shadow wallet for the recipient bundle (we have no secret for it -> no
+        //    position/address; identified by bundle + token + batchId). The validator's recipient
+        //    path keys off metaId(=bundle) + batchId; the empty address/position are ignored on the
+        //    shadow branch, and a fresh recipient REQUIRES the batchId.
+        Wallet recipient(sec, token);
+        recipient.bundle = bundleHash;
+        recipient.address = "";
+        recipient.position = "";
+        recipient.batchId = batchId;   // -> recipient V-atom batchId; validator creates a claimable shadow
+
+        // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - amount); the
+        //    validator registers it, advancing the sender's chain.
+        Wallet remainder(sec, token);
+
+        // 4. Pure 3-V value molecule (NO ContinuID I-atom — the sender is non-genesis, having funded
+        //    the token). initValue: V0 source -balance, V1 recipient +amount, V2 remainder +change.
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initValue(source, recipient, remainder, std::to_string(amountLL));
+
+        log("INFO", "Transferring " + std::to_string(amountLL) + " " + token + " to " + bundleHash);
+        return submitMolecule(mol);
     });
 }
 

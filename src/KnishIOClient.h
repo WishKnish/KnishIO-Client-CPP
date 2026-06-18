@@ -203,16 +203,25 @@ public:
                 const std::unordered_map<std::string, std::string>& meta = {});
     
     /**
-     * Transfer tokens to another wallet
+     * Transfer tokens to another wallet (batched/shadow transfer, mirroring JS transferToken)
+     *
+     * Builds a pure 3-V-atom value molecule: the source token wallet (resolved live via the
+     * Balance query) is debited its full balance, the recipient bundle receives @p amount, and a
+     * fresh remainder wallet holds the change. When @p batchId is set the recipient atom carries it
+     * so the validator creates a claimable shadow wallet (later claimed via claimShadowWallet).
+     *
      * @param bundleHash Recipient's bundle hash
      * @param token Token slug to transfer
      * @param amount Amount to transfer
-     * @return Future containing the transfer response
+     * @param batchId Optional batch id — required for a fresh recipient (no existing wallet for the
+     *                token); set it so the recipient becomes a claimable shadow wallet
+     * @return Future containing the ProposeMolecule response (use isAccepted())
      */
-    [[nodiscard]] std::future<std::unique_ptr<response::ResponseTransferTokens>>
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
     transferToken(const std::string& bundleHash,
                   const std::string& token,
-                  double amount);
+                  double amount,
+                  const std::string& batchId = "");
 
     /**
      * Create a new wallet on the ledger (C-isotope metaType "wallet" + ContinuID)
@@ -297,6 +306,17 @@ private:
     // bundle's live on-ledger ContinuID position so a non-U molecule signs at the chain head.
     [[nodiscard]] std::unique_ptr<response::ResponseProposeMolecule> submitMolecule(KnishIO::Molecule& mol);
     [[nodiscard]] std::string resolveContinuIdPosition(const std::string& bundle);
+
+    // Live-wiring helper (slice 5b): a bundle's on-ledger token wallet (from the Balance query) —
+    // the spendable source for a value transfer. The position/balance MUST come from the validator
+    // (createToken registers the token wallet at a random position; it isn't recoverable otherwise).
+    struct TokenWalletInfo {
+        std::string position;
+        std::string address;
+        std::string balance;   // the on-ledger amount (validator returns it as a string)
+        bool found = false;
+    };
+    [[nodiscard]] TokenWalletInfo resolveTokenWallet(const std::string& bundle, const std::string& token);
 };
 
 } // namespace knishio

@@ -82,7 +82,7 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 			"V",
 			sourceWallet.token,
 			"-" + sourceWallet.balance,  // Debit full balance, not just transfer amount
-			"",  // batchId - empty for transfer atoms
+			sourceWallet.batchId,  // batchId from the wallet (JS Atom.create parity; empty in the parity vectors -> hash-neutral)
 			"",  // metaType - empty for transfer atoms
 			"",  // metaId - empty for transfer atoms
 			std::vector<std::pair<std::string, std::string>>{},  // meta - empty for transfer atoms
@@ -98,7 +98,7 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 			"V",
 			recipientWallet.token,  // Use recipient token, not source token
 			value,
-			"",  // batchId - empty for transfer atoms
+			recipientWallet.batchId,  // batchId from the wallet (shadow/batched transfer; empty in the parity vectors -> hash-neutral)
 			"walletBundle",
 			recipientWallet.bundle,
 			std::vector<std::pair<std::string, std::string>>{},  // Empty meta map for consistency
@@ -115,7 +115,7 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 			"V",
 			remainderWallet.token,
 			std::to_string(remainderAmount),
-			"",  // batchId - empty for transfer atoms
+			remainderWallet.batchId,  // batchId from the wallet (JS Atom.create parity; empty in the parity vectors -> hash-neutral)
 			"walletBundle",
 			remainderWallet.bundle,
 			std::vector<std::pair<std::string, std::string>>{},  // Empty meta map for consistency
@@ -445,6 +445,15 @@ std::string Molecule::toJson() const
 			jsonAtom["value"] = nullptr;
 		} else {
 			jsonAtom["value"] = atom.value;
+		}
+		// batchId is part of the molecular hash (Atom::hashAtoms) AND the validator's AtomInput —
+		// it MUST be on the wire or the validator recomputes a different hash (rejects "Molecular
+		// hash mismatch"). null when empty (matches value/metaType); non-empty on shadow/batched
+		// transfers. Wire-only (the hash is over atom objects, not this JSON) -> parity-hash-neutral.
+		if (atom.batchId.empty()) {
+			jsonAtom["batchId"] = nullptr;
+		} else {
+			jsonAtom["batchId"] = atom.batchId;
 		}
 		if (atom.metaType.empty()) {
 			jsonAtom["metaType"] = nullptr;
