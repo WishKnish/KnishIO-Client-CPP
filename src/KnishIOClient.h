@@ -214,6 +214,23 @@ public:
                   const std::string& token,
                   double amount);
 
+    /**
+     * Create a new wallet on the ledger (C-isotope metaType "wallet" + ContinuID)
+     * @param token Token slug for the new wallet
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    createWallet(const std::string& token);
+
+    /**
+     * Claim a shadow wallet (an address-less wallet created by a batched transfer)
+     * @param token Token slug to claim
+     * @param batchId Batch id identifying the shadow wallet
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    claimShadowWallet(const std::string& token, const std::string& batchId);
+
     // Authentication
     
     /**

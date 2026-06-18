@@ -370,6 +370,50 @@ KnishIOClient::createToken(const std::string& token,
     });
 }
 
+// Wallet operations
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::createWallet(const std::string& token) {
+    return std::async(std::launch::async, [this, token]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+
+        const std::string livePos = resolveContinuIdPosition(getBundle());
+        Wallet source(sec, "USER", livePos);   // sign at the live ContinuID position
+        Wallet newWallet(sec, token);          // the wallet being defined (fresh position)
+        Wallet remainder(sec, "USER");         // fresh remainder (relay race)
+
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initWalletCreation(source, newWallet);
+
+        log("INFO", "Creating wallet for token: " + token);
+        return submitMolecule(mol);
+    });
+}
+
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::claimShadowWallet(const std::string& token, const std::string& batchId) {
+    return std::async(std::launch::async, [this, token, batchId]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+
+        const std::string livePos = resolveContinuIdPosition(getBundle());
+        Wallet source(sec, "USER", livePos);   // sign at the live ContinuID position
+        Wallet claimWallet(sec, token);        // the shadow wallet being claimed
+        claimWallet.batchId = batchId;         // -> walletBatchId meta (validator matches by it)
+        Wallet remainder(sec, "USER");         // fresh remainder
+
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initShadowWalletClaim(source, claimWallet);
+
+        log("INFO", "Claiming shadow wallet token: " + token + " batch: " + batchId);
+        return submitMolecule(mol);
+    });
+}
+
 std::future<std::unique_ptr<response::ResponseTransferTokens>>
 KnishIOClient::transferToken(const std::string& bundleHash,
                             const std::string& token,

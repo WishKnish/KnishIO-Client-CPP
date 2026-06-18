@@ -44,6 +44,11 @@ std::vector<std::pair<std::string, std::string>> buildWalletMetaKeys(const Walle
 	walletMeta.push_back({"walletBundleHash", wallet.bundle});
 	walletMeta.push_back({"walletAddress", wallet.address});
 	walletMeta.push_back({"walletPosition", wallet.position});
+	// JS key order: walletBatchId (gated on non-empty) after walletPosition, before walletPubkey.
+	// Hash-neutral for the parity vectors (their wallets have empty batchId -> not emitted).
+	if (!wallet.batchId.empty()) {
+		walletMeta.push_back({"walletBatchId", wallet.batchId});
+	}
 	if (!wallet.mlkem_public_key.empty()) {
 		walletMeta.push_back({"walletPubkey", toBase64(wallet.mlkem_public_key)});
 	}

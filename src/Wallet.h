@@ -38,6 +38,7 @@ public:
 	std::string key;
 	std::string address;
 	std::string balance;
+	std::string batchId;   // optional batch id (shadow-wallet claims / batched transfers)
 	std::string molecules;
 	std::string bundle;
 	std::vector<unsigned char> privkey;
