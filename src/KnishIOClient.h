@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <random>
 #include <functional>
+#include "TokenUnit.h"
 
 // Forward declarations for KnishIO namespace classes
 namespace KnishIO {
@@ -198,9 +199,10 @@ public:
      * @return Future containing the creation response
      */
     [[nodiscard]] std::future<std::unique_ptr<response::ResponseCreateToken>>
-    createToken(const std::string& token, 
+    createToken(const std::string& token,
                 double amount,
-                const std::unordered_map<std::string, std::string>& meta = {});
+                const std::unordered_map<std::string, std::string>& meta = {},
+                const std::vector<std::string>& units = {});
     
     /**
      * Transfer tokens to another wallet (batched/shadow transfer, mirroring JS transferToken)
@@ -331,6 +333,7 @@ private:
         std::string address;
         std::string balance;   // the on-ledger amount (validator returns it as a string)
         bool found = false;
+        std::vector<KnishIO::TokenUnit> tokenUnits;  // stackable (NFT) units, if the wallet has any
     };
     [[nodiscard]] TokenWalletInfo resolveTokenWallet(const std::string& bundle, const std::string& token);
 };

@@ -383,12 +383,34 @@ std::string KnishIOClient::resolveContinuIdPosition(const std::string& bundle) {
 // The position/balance MUST come from the validator: createToken registered the token wallet at a
 // random position (not recoverable client-side), and the V-isotope signer must sign at that
 // registered position.
+// Parse a wallet GraphQL object's `tokenUnits` array into TokenUnit values (canonical
+// { id, name, metas }). Forward-compat: the validator's tokenUnits resolver is a stub returning
+// [] until gap SDK-001 lands, so this yields units only when the response carries them.
+std::vector<KnishIO::TokenUnit> parseWalletTokenUnits(const nlohmann::json& walletObj) {
+    std::vector<KnishIO::TokenUnit> out;
+    if (walletObj.contains("tokenUnits") && walletObj["tokenUnits"].is_array()) {
+        for (const auto& u : walletObj["tokenUnits"]) {
+            KnishIO::TokenUnit tu;
+            if (u.contains("id") && u["id"].is_string()) tu.id = u["id"].get<std::string>();
+            if (u.contains("name") && u["name"].is_string()) tu.name = u["name"].get<std::string>();
+            if (u.contains("metas") && u["metas"].is_object()) {
+                for (auto it = u["metas"].begin(); it != u["metas"].end(); ++it) {
+                    if (it.value().is_string()) tu.metas[it.key()] = it.value().get<std::string>();
+                }
+            }
+            out.push_back(std::move(tu));
+        }
+    }
+    return out;
+}
+
 KnishIOClient::TokenWalletInfo
 KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& token) {
     static const std::string BALANCE_QUERY =
         "query($bundleHash: String, $token: String) {"
         " Balance(bundleHash: $bundleHash, token: $token) {"
-        " position address tokenSlug amount pubkey batchId bundleHash } }";
+        " position address tokenSlug amount pubkey batchId bundleHash"
+        " tokenUnits { id name metas } } }";
     nlohmann::json variables;
     variables["bundleHash"] = bundle;
     variables["token"] = token;
@@ -412,6 +434,7 @@ KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& 
                 }
                 // A spendable (non-shadow) source must have a real position + address.
                 info.found = !info.position.empty() && !info.address.empty();
+                info.tokenUnits = parseWalletTokenUnits(bal);  // stackable units (forward-compat)
             }
         }
     } catch (const std::exception&) {
@@ -434,8 +457,9 @@ KnishIOClient::proposeMolecule(Molecule* molecule,
 std::future<std::unique_ptr<response::ResponseCreateToken>>
 KnishIOClient::createToken(const std::string& token,
                           double amount,
-                          const std::unordered_map<std::string, std::string>& meta) {
-    return std::async(std::launch::async, [this, token, amount, meta]() -> std::unique_ptr<response::ResponseCreateToken> {
+                          const std::unordered_map<std::string, std::string>& meta,
+                          const std::vector<std::string>& units) {
+    return std::async(std::launch::async, [this, token, amount, meta, units]() -> std::unique_ptr<response::ResponseCreateToken> {
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
 
@@ -449,15 +473,33 @@ KnishIOClient::createToken(const std::string& token,
         Wallet remainder(sec, "USER");         // fresh random remainder
 
         std::vector<std::pair<std::string, std::string>> tokenMeta;
-        tokenMeta.reserve(meta.size());
+        tokenMeta.reserve(meta.size() + 3);
         for (const auto& [k, v] : meta) {
             tokenMeta.push_back({k, v});
+        }
+
+        // Stackable / non-fungible: the units ARE the supply (mirror the JS createToken contract):
+        // amount = unit count, splittable + decimals=0, tokenUnits meta = JSON array of unit ids.
+        long long supply = static_cast<long long>(amount);
+        auto fungIt = meta.find("fungibility");
+        const std::string fungibility = (fungIt != meta.end()) ? fungIt->second : "";
+        if (!units.empty() &&
+            (fungibility == "stackable" || fungibility == "nonfungible" || fungibility == "non-fungible")) {
+            nlohmann::json unitsJson = nlohmann::json::array();
+            for (const auto& u : units) unitsJson.push_back(u);
+            tokenMeta.push_back({"splittable", "1"});
+            tokenMeta.push_back({"decimals", "0"});
+            tokenMeta.push_back({"tokenUnits", unitsJson.dump()});
+            supply = static_cast<long long>(units.size());
+            if (fungibility == "stackable") {
+                recipient.batchId = generateSecret(64);  // claimable stackable batch (mirror JS)
+            }
         }
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
         mol.sourceWallet = std::make_shared<Wallet>(source);
         mol.remainderWallet = std::make_shared<Wallet>(remainder);
-        mol.initTokenCreation(source, recipient, std::to_string(static_cast<long long>(amount)), tokenMeta);
+        mol.initTokenCreation(source, recipient, std::to_string(supply), tokenMeta);
 
         log("INFO", "Creating token: " + token + " amount: " + std::to_string(amount));
 
@@ -540,6 +582,7 @@ KnishIOClient::transferToken(const std::string& bundleHash,
 
         Wallet source(sec, token, src.position);  // re-derives the registered address from secret+token+position
         source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
+        source.tokenUnits = src.tokenUnits;       // stackable units from the Balance response (forward-compat)
 
         // 2. RECIPIENT: a shadow wallet for the recipient bundle (we have no secret for it -> no
         //    position/address; identified by bundle + token + batchId). The validator's recipient
@@ -597,6 +640,7 @@ KnishIOClient::burnToken(const std::string& token, double amount, const std::vec
 
         Wallet source(sec, token, src.position);  // re-derives the registered address from secret+token+position
         source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
+        source.tokenUnits = src.tokenUnits;       // stackable units from the Balance response (forward-compat)
 
         // BURN TARGET: the all-zeros bundle = token destruction. No secret -> no position/address;
         // NO batchId (a batchId would make it a claimable shadow). The validator credits the burn
