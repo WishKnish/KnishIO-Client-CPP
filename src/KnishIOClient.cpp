@@ -517,8 +517,9 @@ std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::transferToken(const std::string& bundleHash,
                             const std::string& token,
                             double amount,
-                            const std::string& batchId) {
-    return std::async(std::launch::async, [this, bundleHash, token, amount, batchId]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+                            const std::string& batchId,
+                            const std::vector<std::string>& units) {
+    return std::async(std::launch::async, [this, bundleHash, token, amount, batchId, units]() -> std::unique_ptr<response::ResponseProposeMolecule> {
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
         const std::string senderBundle = getBundle();
@@ -554,6 +555,14 @@ KnishIOClient::transferToken(const std::string& bundleHash,
         //    validator registers it, advancing the sender's chain.
         Wallet remainder(sec, token);
 
+        // Stackable (NFT) transfer: partition the source's tokenUnits → source + recipient get the
+        // SENT units, remainder gets the KEPT units. No-op for fungible (units empty). Must run
+        // before initValue reads the wallets' units. (A live source carries units only once
+        // tokenUnits response-parsing lands — follow-up; offline drivers set units directly.)
+        if (!units.empty()) {
+            source.splitUnits(units, remainder, &recipient);
+        }
+
         // 4. Pure 3-V value molecule (NO ContinuID I-atom — the sender is non-genesis, having funded
         //    the token). initValue: V0 source -balance, V1 recipient +amount, V2 remainder +change.
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
@@ -567,8 +576,8 @@ KnishIOClient::transferToken(const std::string& bundleHash,
 }
 
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
-KnishIOClient::burnToken(const std::string& token, double amount) {
-    return std::async(std::launch::async, [this, token, amount]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+KnishIOClient::burnToken(const std::string& token, double amount, const std::vector<std::string>& units) {
+    return std::async(std::launch::async, [this, token, amount, units]() -> std::unique_ptr<response::ResponseProposeMolecule> {
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
         const std::string senderBundle = getBundle();
@@ -599,6 +608,12 @@ KnishIOClient::burnToken(const std::string& token, double amount) {
 
         // REMAINDER: a fresh same-token wallet holding (balance - amount).
         Wallet remainder(sec, token);
+
+        // Stackable (NFT) burn: partition the source's tokenUnits → source keeps the BURNED units,
+        // remainder keeps the rest (no recipient — the units are destroyed). No-op for fungible.
+        if (!units.empty()) {
+            source.splitUnits(units, remainder, nullptr);
+        }
 
         // Pure 3-V value molecule (NO ContinuID I-atom). initValue: V0 source -balance,
         // V1 burn target +amount (metaType walletBundle, metaId all-zeros), V2 remainder +change.

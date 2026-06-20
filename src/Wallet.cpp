@@ -428,4 +428,52 @@ std::string Wallet::decryptMessageML768(const std::map<std::string, std::string>
 #endif
 }
 
+// Partition this wallet's tokenUnits across the SENT set (id in `units`) and the KEPT set,
+// mirroring the JS/Rust/Python/C SDK split. Value semantics (no manual ownership): the SENT
+// units stay on this wallet and are copied to recipientWallet (if non-null); the KEPT units
+// go to remainderWallet. For a burn, recipientWallet is null (the burned units stay here).
+void Wallet::splitUnits(const std::vector<std::string> &units, Wallet &remainderWallet, Wallet *recipientWallet)
+{
+    if (units.empty()) {
+        return;
+    }
+    std::vector<TokenUnit> sent;
+    std::vector<TokenUnit> kept;
+    for (const auto &tu : this->tokenUnits) {
+        bool inUnits = false;
+        for (const auto &u : units) {
+            if (tu.id == u) { inUnits = true; break; }
+        }
+        if (inUnits) {
+            sent.push_back(tu);
+        } else {
+            kept.push_back(tu);
+        }
+    }
+    this->tokenUnits = sent;
+    if (recipientWallet != nullptr) {
+        recipientWallet->tokenUnits = sent;
+    }
+    remainderWallet.tokenUnits = kept;
+}
+
+// Serialize this wallet's tokenUnits to the canonical cross-SDK wire value `[[id, name, metas], ...]`
+// (matches JS/Rust/Python/C). Returns "[]" when there are no units.
+std::string Wallet::getTokenUnitsJson() const
+{
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto &tu : this->tokenUnits) {
+        nlohmann::json metas = nlohmann::json::object();
+        for (const auto &kv : tu.metas) {
+            metas[kv.first] = kv.second;
+        }
+        nlohmann::json inner = nlohmann::json::array();
+        inner.push_back(tu.id);
+        inner.push_back(tu.name);
+        inner.push_back(metas);
+        arr.push_back(inner);
+    }
+    return arr.dump();
+}
+
 } // namespace KnishIO

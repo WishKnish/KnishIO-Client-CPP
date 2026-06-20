@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <cstdint>
+#include "TokenUnit.h"
 
 namespace KnishIO {
 
@@ -32,6 +33,13 @@ public:
 	static std::string generateWalletKey(const std::string &secret, const std::string &token, const std::string &position);
 	static std::string generateWalletAddress(const std::string &key);
 
+	// Stackable (NFT) token units. splitUnits partitions this wallet's units across the SENT set
+	// (id ∈ units; kept on this wallet + copied to recipientWallet if non-null) and the KEPT set
+	// (remainderWallet). getTokenUnitsJson() serializes them to the canonical [[id,name,metas],...]
+	// JSON used as the `tokenUnits` V-atom meta. Mirrors JS/Rust/Python/C.
+	void splitUnits(const std::vector<std::string> &units, Wallet &remainderWallet, Wallet *recipientWallet = nullptr);
+	std::string getTokenUnitsJson() const;
+
 public:
 	std::string position;
 	std::string token;
@@ -41,6 +49,7 @@ public:
 	std::string batchId;   // optional batch id (shadow-wallet claims / batched transfers)
 	std::string molecules;
 	std::string bundle;
+	std::vector<TokenUnit> tokenUnits;   // stackable (NFT) token units carried by this wallet
 	std::vector<unsigned char> privkey;
 	std::vector<unsigned char> pubkey;
 

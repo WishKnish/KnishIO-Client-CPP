@@ -221,7 +221,8 @@ public:
     transferToken(const std::string& bundleHash,
                   const std::string& token,
                   double amount,
-                  const std::string& batchId = "");
+                  const std::string& batchId = "",
+                  const std::vector<std::string>& units = {});
 
     /**
      * Burn (destroy) tokens (mirroring JS burnToken)
@@ -236,7 +237,7 @@ public:
      * @return Future containing the ProposeMolecule response (use isAccepted())
      */
     [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
-    burnToken(const std::string& token, double amount);
+    burnToken(const std::string& token, double amount, const std::vector<std::string>& units = {});
 
     /**
      * Create a new wallet on the ledger (C-isotope metaType "wallet" + ContinuID)

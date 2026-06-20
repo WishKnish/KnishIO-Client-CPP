@@ -74,6 +74,12 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 
 	using namespace std;
 
+	// Stackable (NFT): the source atom carries the SENT units (gated; fungible -> empty meta, hash-neutral)
+	std::vector<std::pair<std::string, std::string>> sourceMeta;
+	if (!sourceWallet.tokenUnits.empty()) {
+		sourceMeta.push_back({"tokenUnits", sourceWallet.getTokenUnitsJson()});
+	}
+
 	// Initializing a new Atom to remove FULL BALANCE from source (JavaScript UTXO pattern)
 	this->atoms.push_back
 	(
@@ -85,10 +91,17 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 			sourceWallet.batchId,  // batchId from the wallet (JS Atom.create parity; empty in the parity vectors -> hash-neutral)
 			"",  // metaType - empty for transfer atoms
 			"",  // metaId - empty for transfer atoms
-			std::vector<std::pair<std::string, std::string>>{},  // meta - empty for transfer atoms
+			sourceMeta,  // tokenUnits (SENT) for a stackable transfer/burn; empty for fungible
 			"",  // otsFragment - will be set during signing
 			0)   // index - first atom gets index 0
 	);
+
+	// Stackable (NFT): the recipient atom carries the SENT units (gated; for a burn the all-zeros
+	// burn wallet has no units -> empty, so the burn-target correctly carries none)
+	std::vector<std::pair<std::string, std::string>> recipientMeta;
+	if (!recipientWallet.tokenUnits.empty()) {
+		recipientMeta.push_back({"tokenUnits", recipientWallet.getTokenUnitsJson()});
+	}
 
 	// Initializing a new Atom to add tokens to recipient (JavaScript pattern)
 	this->atoms.push_back
@@ -101,11 +114,17 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 			recipientWallet.batchId,  // batchId from the wallet (shadow/batched transfer; empty in the parity vectors -> hash-neutral)
 			"walletBundle",
 			recipientWallet.bundle,
-			std::vector<std::pair<std::string, std::string>>{},  // Empty meta map for consistency
+			recipientMeta,  // tokenUnits (SENT) for a stackable transfer; empty for fungible / burn-target
 			"",  // otsFragment - will be set during signing
 			1)   // index - second atom gets index 1
 	);
 	
+	// Stackable (NFT): the remainder atom carries the KEPT units (gated; fungible -> empty)
+	std::vector<std::pair<std::string, std::string>> remainderMeta;
+	if (!remainderWallet.tokenUnits.empty()) {
+		remainderMeta.push_back({"tokenUnits", remainderWallet.getTokenUnitsJson()});
+	}
+
 	// Always add remainder atom (JavaScript canonical UTXO pattern)
 	auto remainderAmount = std::stoi(sourceWallet.balance) - std::stoi(value);
 	this->atoms.push_back
@@ -118,7 +137,7 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 			remainderWallet.batchId,  // batchId from the wallet (JS Atom.create parity; empty in the parity vectors -> hash-neutral)
 			"walletBundle",
 			remainderWallet.bundle,
-			std::vector<std::pair<std::string, std::string>>{},  // Empty meta map for consistency
+			remainderMeta,  // tokenUnits (KEPT) for a stackable transfer/burn; empty for fungible
 			"",  // otsFragment - will be set during signing
 			2)   // index - third atom gets index 2
 	);
