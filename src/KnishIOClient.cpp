@@ -566,6 +566,52 @@ KnishIOClient::transferToken(const std::string& bundleHash,
     });
 }
 
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::burnToken(const std::string& token, double amount) {
+    return std::async(std::launch::async, [this, token, amount]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+        const std::string senderBundle = getBundle();
+
+        // SOURCE: the bundle's on-ledger token wallet (registered at its create position; the
+        // V-isotope signer must sign there). Resolved live via the Balance query.
+        TokenWalletInfo src = resolveTokenWallet(senderBundle, token);
+        if (!src.found) {
+            throw KnishIOException("No spendable wallet for token " + token);
+        }
+        const long long amountLL = static_cast<long long>(amount);
+        long long srcBalance = 0;
+        try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
+        if (srcBalance < amountLL) {
+            throw KnishIOException("Insufficient balance for token " + token);
+        }
+
+        Wallet source(sec, token, src.position);  // re-derives the registered address from secret+token+position
+        source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
+
+        // BURN TARGET: the all-zeros bundle = token destruction. No secret -> no position/address;
+        // NO batchId (a batchId would make it a claimable shadow). The validator credits the burn
+        // amount to this unspendable bundle, satisfying conservation while destroying the tokens.
+        Wallet burnWallet(sec, token);
+        burnWallet.bundle = "0000000000000000000000000000000000000000000000000000000000000000";
+        burnWallet.address = "";
+        burnWallet.position = "";
+
+        // REMAINDER: a fresh same-token wallet holding (balance - amount).
+        Wallet remainder(sec, token);
+
+        // Pure 3-V value molecule (NO ContinuID I-atom). initValue: V0 source -balance,
+        // V1 burn target +amount (metaType walletBundle, metaId all-zeros), V2 remainder +change.
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initValue(source, burnWallet, remainder, std::to_string(amountLL));
+
+        log("INFO", "Burning " + std::to_string(amountLL) + " " + token);
+        return submitMolecule(mol);
+    });
+}
+
 // Authentication
 std::future<std::unique_ptr<response::ResponseRequestAuthorization>>
 KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,

@@ -224,6 +224,21 @@ public:
                   const std::string& batchId = "");
 
     /**
+     * Burn (destroy) tokens (mirroring JS burnToken)
+     *
+     * Builds a pure 3-V-atom value molecule: the source token wallet (resolved live via the Balance
+     * query) is debited its full balance, @p amount is credited to the all-zeros burn bundle
+     * (an unspendable destination — no batchId, so no claimable shadow), and a fresh remainder wallet
+     * holds the change. Sum = 0. Reuses initValue with the burn bundle as the recipient.
+     *
+     * @param token Token slug to burn
+     * @param amount Amount to burn
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    burnToken(const std::string& token, double amount);
+
+    /**
      * Create a new wallet on the ledger (C-isotope metaType "wallet" + ContinuID)
      * @param token Token slug for the new wallet
      * @return Future containing the ProposeMolecule response (use isAccepted())
