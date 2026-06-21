@@ -518,6 +518,10 @@ KnishIOClient::createToken(const std::string& token,
 
         auto result = std::make_unique<response::ResponseCreateToken>();
         result->setData(proposeResp->getData());
+        // The ProposeMolecule response carries neither slug nor amount — store them from the args
+        // (supply == unit count for stackable, else the requested amount) so the getters are correct.
+        result->setTokenSlug(token);
+        result->setAmount(std::to_string(supply));
         return result;
     });
 }

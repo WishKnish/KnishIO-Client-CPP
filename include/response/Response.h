@@ -177,6 +177,16 @@ public:
      * @return Initial token amount
      */
     [[nodiscard]] std::string getAmount() const;
+
+    /** Set the created token slug (carried from createToken's arg — not present in the ProposeMolecule response) */
+    void setTokenSlug(const std::string& slug) { tokenSlug_ = slug; }
+
+    /** Set the created amount/supply (carried from createToken — not present in the ProposeMolecule response) */
+    void setAmount(const std::string& amount) { amount_ = amount; }
+
+private:
+    std::string tokenSlug_;
+    std::string amount_;
 };
 
 /**

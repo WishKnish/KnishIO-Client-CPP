@@ -3,6 +3,24 @@
 namespace knishio {
 namespace response {
 
+namespace {
+// The auth molecule's JWT + pubkey live in data.ProposeMolecule.payload, a STRINGIFIED JSON
+// (the validator funnels every op through ProposeMolecule). Returns the parsed payload object,
+// or an empty object when absent/null/unparseable.
+nlohmann::json parseProposePayload(const nlohmann::json& data) {
+    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].is_object()
+        && data["ProposeMolecule"].contains("payload")
+        && data["ProposeMolecule"]["payload"].is_string()) {
+        try {
+            return nlohmann::json::parse(data["ProposeMolecule"]["payload"].get<std::string>());
+        } catch (const std::exception&) {
+            // malformed payload -> empty object
+        }
+    }
+    return nlohmann::json::object();
+}
+} // anonymous namespace
+
 // ResponseBalance implementation
 std::optional<ResponseBalance::Balance> ResponseBalance::getBalance() const {
     return balance;
@@ -118,52 +136,57 @@ bool ResponseCreateToken::isCreated() const {
     return false;
 }
 
+// The slug + amount are not in the ProposeMolecule response shape — createToken stores them
+// from its args via setTokenSlug/setAmount (see KnishIOClient::createToken).
 std::string ResponseCreateToken::getTokenSlug() const {
-    if (data.contains("CreateToken") && data["CreateToken"].contains("tokenSlug")) {
-        return data["CreateToken"]["tokenSlug"];
-    }
-    return "";
+    return tokenSlug_;
 }
 
 std::string ResponseCreateToken::getAmount() const {
-    if (data.contains("CreateToken") && data["CreateToken"].contains("amount")) {
-        return data["CreateToken"]["amount"];
-    }
-    return "0";
+    return amount_.empty() ? "0" : amount_;
 }
 
 // ResponseTransferTokens implementation
+// Vestigial: transferToken/burnToken return ResponseProposeMolecule (nothing builds this class).
+// Kept correct-if-used by reading the real ProposeMolecule shape rather than a never-present
+// data.TransferTokens object.
 bool ResponseTransferTokens::isTransferred() const {
-    return data.contains("TransferTokens") && 
-           data["TransferTokens"].contains("success") && 
-           data["TransferTokens"]["success"] == true;
+    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("status")
+        && data["ProposeMolecule"]["status"].is_string()) {
+        const std::string status = data["ProposeMolecule"]["status"].get<std::string>();
+        return status == "accepted" || status == "success";
+    }
+    return false;
 }
 
 std::string ResponseTransferTokens::getTransactionHash() const {
-    if (data.contains("TransferTokens") && data["TransferTokens"].contains("transactionHash")) {
-        return data["TransferTokens"]["transactionHash"];
+    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("molecularHash")
+        && data["ProposeMolecule"]["molecularHash"].is_string()) {
+        return data["ProposeMolecule"]["molecularHash"].get<std::string>();
     }
     return "";
 }
 
 std::string ResponseTransferTokens::getAmount() const {
-    if (data.contains("TransferTokens") && data["TransferTokens"].contains("amount")) {
-        return data["TransferTokens"]["amount"];
-    }
+    // The ProposeMolecule response shape carries no transfer amount. Honest default.
     return "0";
 }
 
 // ResponseRequestAuthorization implementation
+// The JWT + pubkey are in data.ProposeMolecule.payload (a stringified JSON), NOT in a
+// data.RequestAuthorization object — the validator returns every op as a ProposeMolecule.
 std::string ResponseRequestAuthorization::getAuthToken() const {
-    if (data.contains("RequestAuthorization") && data["RequestAuthorization"].contains("token")) {
-        return data["RequestAuthorization"]["token"];
+    const auto payload = parseProposePayload(data);
+    if (payload.contains("token") && payload["token"].is_string()) {
+        return payload["token"].get<std::string>();
     }
     return "";
 }
 
 std::string ResponseRequestAuthorization::getPublicKey() const {
-    if (data.contains("RequestAuthorization") && data["RequestAuthorization"].contains("pubkey")) {
-        return data["RequestAuthorization"]["pubkey"];
+    const auto payload = parseProposePayload(data);
+    if (payload.contains("pubkey") && payload["pubkey"].is_string()) {
+        return payload["pubkey"].get<std::string>();
     }
     return "";
 }
@@ -173,16 +196,20 @@ bool ResponseRequestAuthorization::isAuthorized() const {
 }
 
 // ResponseProposeMolecule implementation
+// All getters guard is_string(): `reason` is JSON null on an accepted molecule, and a raw
+// null->std::string conversion throws (nlohmann type_error).
 std::string ResponseProposeMolecule::getMolecularHash() const {
-    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("molecularHash")) {
-        return data["ProposeMolecule"]["molecularHash"];
+    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("molecularHash")
+        && data["ProposeMolecule"]["molecularHash"].is_string()) {
+        return data["ProposeMolecule"]["molecularHash"].get<std::string>();
     }
     return "";
 }
 
 std::string ResponseProposeMolecule::getStatus() const {
-    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("status")) {
-        return data["ProposeMolecule"]["status"];
+    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("status")
+        && data["ProposeMolecule"]["status"].is_string()) {
+        return data["ProposeMolecule"]["status"].get<std::string>();
     }
     return "unknown";
 }
@@ -192,8 +219,9 @@ bool ResponseProposeMolecule::isAccepted() const {
 }
 
 std::string ResponseProposeMolecule::getRejectionReason() const {
-    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("reason")) {
-        return data["ProposeMolecule"]["reason"];
+    if (data.contains("ProposeMolecule") && data["ProposeMolecule"].contains("reason")
+        && data["ProposeMolecule"]["reason"].is_string()) {
+        return data["ProposeMolecule"]["reason"].get<std::string>();
     }
     return "";
 }
