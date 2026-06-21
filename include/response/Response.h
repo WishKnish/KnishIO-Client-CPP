@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include "third_party/nlohmann/json.hpp"
+#include "TokenUnit.h"  // src/ is on the include path (CMakeLists include_directories(.../src))
 
 namespace knishio {
 namespace response {
@@ -76,6 +77,7 @@ public:
         std::string position;
         std::string batchId;
         std::vector<std::string> characters;
+        std::vector<KnishIO::TokenUnit> tokenUnits;  ///< Stackable (NFT) units held by this wallet
     };
     
     /**

@@ -189,13 +189,24 @@ KnishIOClient::queryBalance(const std::string& token,
 
         auto result = std::make_unique<response::ResponseBalance>();
         if (tw.found) {
+            // Re-serialize the stackable units resolveTokenWallet already parsed into the canonical
+            // [{id,name,metas},...] shape so ResponseBalance::parseData populates Balance.tokenUnits
+            // (read-parity with C's query_balance_wallet / JS's queryBalance).
+            nlohmann::json unitsJson = nlohmann::json::array();
+            for (const auto& u : tw.tokenUnits) {
+                nlohmann::json metasJson = nlohmann::json::object();
+                for (const auto& [k, v] : u.metas) metasJson[k] = v;
+                unitsJson.push_back({{"id", u.id}, {"name", u.name}, {"metas", metasJson}});
+            }
+
             nlohmann::json balanceData;
             balanceData["Balance"] = {
                 {"position", tw.position},
                 {"address", tw.address},
                 {"amount", tw.balance},
                 {"tokenSlug", token},
-                {"bundleHash", b}
+                {"bundleHash", b},
+                {"tokenUnits", unitsJson}
             };
             result->setData(balanceData);
             result->parseData();

@@ -33,6 +33,23 @@ void ResponseBalance::parseData() {
             }
         }
 
+        // Stackable (NFT) units the wallet holds. Canonical shape: tokenUnits[{id,name,metas}].
+        // Mirrors KnishIOClient.cpp::parseWalletTokenUnits so a C++ consumer can read units back
+        // (the validator serves Wallet.tokenUnits as of the stackable Phase-1 work).
+        if (balanceData.contains("tokenUnits") && balanceData["tokenUnits"].is_array()) {
+            for (const auto& u : balanceData["tokenUnits"]) {
+                KnishIO::TokenUnit tu;
+                if (u.contains("id") && u["id"].is_string()) tu.id = u["id"].get<std::string>();
+                if (u.contains("name") && u["name"].is_string()) tu.name = u["name"].get<std::string>();
+                if (u.contains("metas") && u["metas"].is_object()) {
+                    for (auto it = u["metas"].begin(); it != u["metas"].end(); ++it) {
+                        if (it.value().is_string()) tu.metas[it.key()] = it.value().get<std::string>();
+                    }
+                }
+                b.tokenUnits.push_back(std::move(tu));
+            }
+        }
+
         balance = b;
     }
 }
