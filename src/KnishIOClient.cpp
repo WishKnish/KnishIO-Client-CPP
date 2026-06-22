@@ -634,6 +634,85 @@ KnishIOClient::transferToken(const std::string& bundleHash,
 }
 
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::transferTokens(const std::string& token,
+                             const std::vector<TransferRecipient>& recipients) {
+    return std::async(std::launch::async, [this, token, recipients]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+        const std::string senderBundle = getBundle();
+
+        // Per-recipient amount: stackable -> unit count; fungible -> explicit amount (never both)
+        std::vector<std::string> amounts;
+        amounts.reserve(recipients.size());
+        long long total = 0;
+        for (const auto& r : recipients) {
+            long long amt;
+            if (!r.units.empty()) {
+                if (r.amount > 0) {
+                    throw KnishIOException("TransferRecipient accepts either units (stackable) or amount (fungible), not both");
+                }
+                amt = static_cast<long long>(r.units.size());
+            } else {
+                amt = static_cast<long long>(r.amount);
+            }
+            amounts.push_back(std::to_string(amt));
+            total += amt;
+        }
+
+        // 1. SOURCE: the bundle's on-ledger token wallet (position + balance + units from Balance)
+        TokenWalletInfo src = resolveTokenWallet(senderBundle, token);
+        if (!src.found) {
+            throw KnishIOException("No spendable wallet for token " + token);
+        }
+        long long srcBalance = 0;
+        try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
+        if (srcBalance < total) {
+            throw KnishIOException("Insufficient balance for token " + token);
+        }
+        Wallet source(sec, token, src.position);  // re-derives the registered address
+        source.balance = src.balance;             // initValues debits the full balance (UTXO)
+        source.tokenUnits = src.tokenUnits;
+
+        // 2. RECIPIENTS: a shadow wallet per destination (bundle + token + batchId; empty pos/addr)
+        std::vector<Wallet> recipientWallets;
+        recipientWallets.reserve(recipients.size());
+        for (const auto& r : recipients) {
+            Wallet recipient(sec, token);
+            recipient.bundle = r.bundleHash;
+            recipient.address = "";
+            recipient.position = "";
+            recipient.batchId = r.batchId;   // -> recipient V-atom batchId; validator creates a claimable shadow
+            recipientWallets.push_back(recipient);
+        }
+
+        // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - total)
+        Wallet remainder(sec, token);
+
+        // 4. Stackable (NFT): partition the source's units → source keeps the SENT union, each
+        //    recipient its subset, remainder the KEPT. No-op for fungible. Must run before initValues.
+        std::vector<std::vector<std::string>> unitLists;
+        unitLists.reserve(recipients.size());
+        bool anyUnits = false;
+        for (const auto& r : recipients) {
+            unitLists.push_back(r.units);
+            if (!r.units.empty()) { anyUnits = true; }
+        }
+        if (anyUnits) {
+            source.splitUnitsMulti(unitLists, recipientWallets, remainder);
+        }
+
+        // 5. Pure (N+2)-V value molecule (NO ContinuID I-atom — the sender is non-genesis).
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initValues(source, recipientWallets, amounts, remainder);
+
+        log("INFO", "Transferring " + token + " to " + std::to_string(recipients.size()) + " recipients");
+        return submitMolecule(mol);
+    });
+}
+
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::burnToken(const std::string& token, double amount, const std::vector<std::string>& units) {
     return std::async(std::launch::async, [this, token, amount, units]() -> std::unique_ptr<response::ResponseProposeMolecule> {
         ensureAuthenticated();

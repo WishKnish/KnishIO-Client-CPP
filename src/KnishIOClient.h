@@ -69,6 +69,18 @@ public:
     };
 
     /**
+     * One destination of a multi-recipient stackable transfer (see transferTokens).
+     * Provide EITHER units (stackable/NFT: amount = units.size()) OR amount (fungible), not both.
+     * batchId makes the recipient a claimable shadow under that batch.
+     */
+    struct TransferRecipient {
+        std::string bundleHash;
+        double amount = 0.0;
+        std::string batchId;
+        std::vector<std::string> units;
+    };
+
+    /**
      * Builder pattern for creating KnishIOClient instances
      */
     class Builder {
@@ -225,6 +237,18 @@ public:
                   double amount,
                   const std::string& batchId = "",
                   const std::vector<std::string>& units = {});
+
+    /**
+     * Multi-recipient transfer: fund N recipients from a single source in ONE molecule
+     * (multi-recipient sibling of transferToken). Each recipient gets its own subset of stackable
+     * units (or a fungible amount); a remainder returns the rest to the sender.
+     * @param token Token slug to transfer
+     * @param recipients Destinations (bundleHash + units OR amount + optional batchId)
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    transferTokens(const std::string& token,
+                   const std::vector<TransferRecipient>& recipients);
 
     /**
      * Burn (destroy) tokens (mirroring JS burnToken)

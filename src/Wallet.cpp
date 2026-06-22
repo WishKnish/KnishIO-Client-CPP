@@ -457,6 +457,49 @@ void Wallet::splitUnits(const std::vector<std::string> &units, Wallet &remainder
     remainderWallet.tokenUnits = kept;
 }
 
+void Wallet::splitUnitsMulti(const std::vector<std::vector<std::string>> &recipientUnitLists,
+                             std::vector<Wallet> &recipientWallets, Wallet &remainderWallet)
+{
+    // Any units to send? (else fungible -> no-op)
+    bool anySent = false;
+    for (const auto &lst : recipientUnitLists) {
+        if (!lst.empty()) { anySent = true; break; }
+    }
+    if (!anySent) {
+        return;
+    }
+
+    auto idInList = [](const std::string &id, const std::vector<std::string> &lst) {
+        for (const auto &u : lst) {
+            if (u == id) { return true; }
+        }
+        return false;
+    };
+
+    // Each recipient gets its own subset of the source's units
+    for (size_t i = 0; i < recipientWallets.size(); ++i) {
+        std::vector<TokenUnit> subset;
+        const std::vector<std::string> &ids = i < recipientUnitLists.size() ? recipientUnitLists[i] : std::vector<std::string>{};
+        for (const auto &tu : this->tokenUnits) {
+            if (idInList(tu.id, ids)) { subset.push_back(tu); }
+        }
+        recipientWallets[i].tokenUnits = subset;
+    }
+
+    // Remainder keeps the KEPT units (∉ any list); source carries the SENT union (∈ some list)
+    std::vector<TokenUnit> kept;
+    std::vector<TokenUnit> sentUnion;
+    for (const auto &tu : this->tokenUnits) {
+        bool sent = false;
+        for (const auto &lst : recipientUnitLists) {
+            if (idInList(tu.id, lst)) { sent = true; break; }
+        }
+        if (sent) { sentUnion.push_back(tu); } else { kept.push_back(tu); }
+    }
+    remainderWallet.tokenUnits = kept;
+    this->tokenUnits = sentUnion;
+}
+
 // Serialize this wallet's tokenUnits to the canonical cross-SDK wire value `[[id, name, metas], ...]`
 // (matches JS/Rust/Python/C). Returns "[]" when there are no units.
 std::string Wallet::getTokenUnitsJson() const

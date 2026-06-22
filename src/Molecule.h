@@ -16,6 +16,10 @@ public:
 	~Molecule();
 
 	std::vector<Atom> initValue(const Wallet &sourceWallet, const Wallet &recipientWallet, const Wallet &remainderWallet, const std::string &value);
+	// Multi-recipient sibling of initValue: one source debits its FULL balance to fund N recipients
+	// (each its own amount + stackable units) plus a remainder back to the sender. recipientWallets
+	// is parallel to amounts. Conserves: -balance + Σamounts + (balance-Σ) == 0.
+	std::vector<Atom> initValues(const Wallet &sourceWallet, const std::vector<Wallet> &recipientWallets, const std::vector<std::string> &amounts, const Wallet &remainderWallet);
 	std::vector<Atom> initTokenCreation(const Wallet &sourceWallet, const Wallet &recipientWallet, const std::string &amount
 		, const std::vector<std::pair<std::string, std::string>> &tokenMeta);
 	std::vector<Atom> initMeta(const Wallet &wallet, const std::vector<std::pair<std::string, std::string>> &meta, const std::string &metaType, const std::string &metaId);

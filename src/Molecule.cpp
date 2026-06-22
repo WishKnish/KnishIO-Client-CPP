@@ -145,6 +145,83 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 	return this->atoms;
 }
 
+std::vector<Atom> Molecule::initValues(const Wallet &sourceWallet, const std::vector<Wallet> &recipientWallets, const std::vector<std::string> &amounts, const Wallet &remainderWallet)
+{
+	this->molecularHash.clear();
+
+	// Source atom: debit the ENTIRE balance (UTXO drain); carries the SENT union of token units
+	// (gated; fungible -> empty meta, hash-neutral). Index 0.
+	std::vector<std::pair<std::string, std::string>> sourceMeta;
+	if (!sourceWallet.tokenUnits.empty()) {
+		sourceMeta.push_back({"tokenUnits", sourceWallet.getTokenUnitsJson()});
+	}
+	int index = 0;
+	this->atoms.push_back
+	(
+		Atom(sourceWallet.position,
+			sourceWallet.address,
+			"V",
+			sourceWallet.token,
+			"-" + sourceWallet.balance,
+			sourceWallet.batchId,
+			"",  // metaType - empty for the source atom
+			"",  // metaId
+			sourceMeta,  // tokenUnits (SENT union) for stackable; empty for fungible
+			"",
+			index++)
+	);
+
+	// One atom per recipient: +amount_i, walletBundle -> recipient bundle, its own SENT subset
+	long long total = 0;
+	for (size_t i = 0; i < recipientWallets.size(); ++i) {
+		const Wallet &recipientWallet = recipientWallets[i];
+		const std::string &amount = amounts[i];
+		total += std::stoll(amount);
+
+		std::vector<std::pair<std::string, std::string>> recipientMeta;
+		if (!recipientWallet.tokenUnits.empty()) {
+			recipientMeta.push_back({"tokenUnits", recipientWallet.getTokenUnitsJson()});
+		}
+		this->atoms.push_back
+		(
+			Atom(recipientWallet.position,
+				recipientWallet.address,
+				"V",
+				recipientWallet.token,
+				amount,
+				recipientWallet.batchId,
+				"walletBundle",
+				recipientWallet.bundle,
+				recipientMeta,  // tokenUnits (this recipient's SENT) for stackable; empty for fungible
+				"",
+				index++)
+		);
+	}
+
+	// Remainder atom: +(balance - Σamounts), walletBundle -> sender bundle, KEPT units. Last index.
+	std::vector<std::pair<std::string, std::string>> remainderMeta;
+	if (!remainderWallet.tokenUnits.empty()) {
+		remainderMeta.push_back({"tokenUnits", remainderWallet.getTokenUnitsJson()});
+	}
+	auto remainderAmount = std::stoll(sourceWallet.balance) - total;
+	this->atoms.push_back
+	(
+		Atom(remainderWallet.position,
+			remainderWallet.address,
+			"V",
+			remainderWallet.token,
+			std::to_string(remainderAmount),
+			remainderWallet.batchId,
+			"walletBundle",
+			remainderWallet.bundle,
+			remainderMeta,  // tokenUnits (KEPT) for stackable; empty for fungible
+			"",
+			index)
+	);
+
+	return this->atoms;
+}
+
 /**
  * Initialize a C-type molecule to issue a new type of token
  *

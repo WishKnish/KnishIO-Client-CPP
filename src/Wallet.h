@@ -38,6 +38,10 @@ public:
 	// (remainderWallet). getTokenUnitsJson() serializes them to the canonical [[id,name,metas],...]
 	// JSON used as the `tokenUnits` V-atom meta. Mirrors JS/Rust/Python/C.
 	void splitUnits(const std::vector<std::string> &units, Wallet &remainderWallet, Wallet *recipientWallet = nullptr);
+	// N-way sibling of splitUnits (multi-recipient stackable transfer): the source keeps the SENT
+	// union, each recipientWallets[i] gets its own subset (recipientUnitLists[i]), and remainderWallet
+	// keeps the KEPT units. recipientUnitLists is parallel to recipientWallets.
+	void splitUnitsMulti(const std::vector<std::vector<std::string>> &recipientUnitLists, std::vector<Wallet> &recipientWallets, Wallet &remainderWallet);
 	std::string getTokenUnitsJson() const;
 
 public:
