@@ -1,0 +1,59 @@
+# C++ SDK CI — enforces the clang-tidy lint gate (cycle 114) + the build + cpp_self_test
+# (the 6 frozen molecular-hash vectors + ML-KEM768). Born-enforced: the repo had no CI,
+# so the gate was local-only/bypassable until now.
+#
+# clang-tidy is version-sensitive (the .clang-tidy bugprone-*/performance-* globs +
+# WarningsAsErrors pick up whatever the installed clang-tidy defines). The gate was tuned
+# against LLVM 22.1.4 locally, so CI pins LLVM 22 to reproduce that check set; the SDK is
+# built with clang-22 too, so the compile_commands.json clang-tidy reads is clang-clean.
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  gate:
+    name: build + self-test + clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libsodium-dev libcurl4-openssl-dev \
+            lsb-release wget software-properties-common gnupg
+
+      # Pin LLVM 22 (matches the cycle-114 tuning, LLVM 22.1.4) so the clang-tidy check set
+      # is reproducible — a different version could add/drop bugprone/performance checks.
+      - name: Install LLVM 22 (clang + clang-tidy)
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install -y clang-tidy-22
+
+      # Build with clang-22 → the compile DB clang-tidy reads is clang-clean (no g++-only
+      # flags). Default build type (no -march=native); EXPORT_COMPILE_COMMANDS is on by default.
+      - name: Configure
+        run: |
+          CC=clang-22 CXX=clang++-22 cmake -S . -B build \
+            -DKNISHIO_BUILD_TESTS=ON \
+            -DKNISHIO_BUILD_EXAMPLES=OFF \
+            -DCLANG_TIDY_EXE="$(command -v clang-tidy-22)"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      # Deterministic parity gate: the 6 frozen molecular hashes + ML-KEM768. Cross-SDK
+      # validation is disabled (a single-repo checkout has no sibling SDK result dumps).
+      - name: Self-test (frozen molecular hashes + ML-KEM768)
+        run: |
+          mkdir -p shared-test-results
+          KNISHIO_DISABLE_CROSS_VALIDATION=true \
+          KNISHIO_SHARED_RESULTS="$PWD/shared-test-results" \
+            ./build/cpp_self_test
+
+      # The cycle-114 lint gate (clang-tidy bugprone-*/performance-*, WarningsAsErrors).
+      # Last so a clang-tidy version-drift failure is clearly isolated after build + self-test pass.
+      - name: clang-tidy (lint gate)
+        run: cmake --build build --target lint
