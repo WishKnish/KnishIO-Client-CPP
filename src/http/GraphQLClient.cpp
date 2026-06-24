@@ -251,7 +251,9 @@ void GraphQLClient::setupRequestHeaders(CURL* curl, const Request& request) {
     
     // Add custom headers
     for (const auto& [name, value] : pImpl_->customHeaders) {
-        std::string header = name + ": " + value;
+        std::string header = name;
+        header += ": ";
+        header += value;
         headers = curl_slist_append(headers, header.c_str());
     }
     

@@ -293,6 +293,7 @@ Molecule* KnishIOClient::createMolecule(
     if (secret.has_value()) {
         moleculeSecret = secret.value();
     } else if (hasSecret()) {
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — guarded by hasSecret()
         moleculeSecret = pImpl_->secret.value();
     } else {
         throw KnishIOException("No secret available for molecule creation");
@@ -325,6 +326,7 @@ KnishIOClient::submitMolecule(KnishIO::Molecule& mol) {
         throw KnishIOException("No secret available for signing molecule");
     }
 
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — guarded by hasSecret() above
     mol.sign(pImpl_->secret.value());
     if (!Molecule::verify(mol)) {
         throw KnishIOException("Molecule validation failed");
@@ -944,7 +946,7 @@ void KnishIOClient::log(const std::string& level, const std::string& message) co
     auto time_t = std::chrono::system_clock::to_time_t(now);
     
     std::cout << "[" << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") 
-              << "] [" << level << "] " << message << std::endl;
+              << "] [" << level << "] " << message << '\n';
 }
 
 void KnishIOClient::ensureAuthenticated() const {

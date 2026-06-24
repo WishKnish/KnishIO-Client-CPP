@@ -1,0 +1,28 @@
+# clang-tidy lint gate for the KnishIO C++ SDK (cycle 114).
+#
+# Pragmatic baseline: enable the high-value real-bug families (bugprone, performance)
+# and leave the style firehose OFF (readability/modernize/cppcoreguidelines/google/
+# llvm/hicpp/misc — magic-numbers, reinterpret-cast for the libsodium C API, naming,
+# sweeping rewrites) — mirrors the Rust clippy::all-not-pedantic (c111) + Kotlin
+# detekt-default (c113) philosophy. Read-only gate (no --fix) → cannot move the frozen
+# molecular hashes. Scope: project src/ only; vendored (src/third_party) + external +
+# tests/examples/self-test excluded (driven by the CMake `lint` target's file list +
+# the header filters below).
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-exception-escape,
+  -bugprone-reserved-identifier,
+  -bugprone-empty-catch,
+  -bugprone-switch-missing-default-case
+# (relaxed above: easily-swappable-parameters floods on same-type params; narrowing-conversions
+#  is pervasive+intentional in the SHAKE/hash core; empty-catch flags the SDK's deliberate
+#  best-effort parse→fallback boundaries [the Kotlin-SwallowedException analog]; switch-missing-
+#  default-case flags bounded-index switches where a default is unreachable.)
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/src/.*'
+ExcludeHeaderFilterRegex: '.*/(third_party|external)/.*'
+FormatStyle: none

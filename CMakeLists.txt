@@ -18,6 +18,9 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+# Emit compile_commands.json for clang-tidy (the `lint` target below) + IDE tooling.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Build configuration
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -376,6 +379,32 @@ endif()
 
 # Install self-test binary
 install(TARGETS cpp_self_test DESTINATION bin)
+
+# clang-tidy static-analysis lint gate (cycle 114). Lints the project sources under
+# src/ (EXCLUDING src/third_party vendored code) against the conservative .clang-tidy
+# baseline (bugprone-/performance-* real-bug checks; the readability/modernize/
+# cppcoreguidelines style firehose is left off). Read-only (no --fix) → cannot move the
+# frozen self-test molecular hashes. Run: `cmake --build build --target lint`.
+find_program(CLANG_TIDY_EXE NAMES clang-tidy HINTS /opt/homebrew/opt/llvm/bin)
+if(CLANG_TIDY_EXE)
+    file(GLOB_RECURSE KNISHIO_LINT_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+    list(FILTER KNISHIO_LINT_SOURCES EXCLUDE REGEX "/third_party/")
+    # On macOS the build uses Apple clang (/usr/bin/c++), whose implicit SDK sysroot
+    # differs from Homebrew LLVM clang-tidy → pass the SDK sysroot so <string> etc. resolve.
+    set(KNISHIO_TIDY_EXTRA "")
+    if(APPLE)
+        execute_process(COMMAND xcrun --show-sdk-path
+            OUTPUT_VARIABLE KNISHIO_MACOS_SDK OUTPUT_STRIP_TRAILING_WHITESPACE)
+        set(KNISHIO_TIDY_EXTRA --extra-arg=-isysroot${KNISHIO_MACOS_SDK})
+    endif()
+    add_custom_target(lint
+        COMMAND ${CLANG_TIDY_EXE} ${KNISHIO_TIDY_EXTRA} -p ${CMAKE_BINARY_DIR} ${KNISHIO_LINT_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running clang-tidy static analysis (lint gate)"
+        VERBATIM)
+else()
+    message(STATUS "  clang-tidy: NOT found — `lint` target unavailable")
+endif()
 
 include(CPack)
 
