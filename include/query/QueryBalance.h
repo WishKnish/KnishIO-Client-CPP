@@ -1,6 +1,8 @@
 #pragma once
 
 #include "query/Query.h"
+#include <optional>  // std::optional/std::nullopt in the method signatures — not transitively included on Linux (cycle 127)
+#include <string>
 
 namespace knishio {
 namespace query {
