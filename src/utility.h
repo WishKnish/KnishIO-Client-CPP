@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>  // uint8_t in the declarations below — not transitively included on Linux (cycle 127)
 
 std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom, unsigned int baseTo, const char *baseToSymbolTable);
 
