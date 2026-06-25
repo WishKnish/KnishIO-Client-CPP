@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <cctype>
 #include <cmath>
+#include <cstring>  // strlen — transitively included on macOS, NOT on Linux (cycle 127)
 
 std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom, unsigned int baseTo, const char *baseToSymbolTable)
 {

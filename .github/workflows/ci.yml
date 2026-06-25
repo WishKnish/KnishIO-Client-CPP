@@ -15,7 +15,11 @@ jobs:
     name: build + self-test + clang-tidy
     runs-on: ubuntu-latest
     steps:
+      # submodules: recursive fetches external/mlkem-native (the ML-KEM768 backend the
+      # C++ build GLOBs + includes); without it CI fails with "'mlkem_native.h' not found".
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install build deps
         run: |

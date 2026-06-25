@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <stdexcept>
+#include <cstdint>  // uint32_t/uint8_t — transitively included on macOS, NOT on Linux (cycle 127)
 
 namespace knishio {
 
