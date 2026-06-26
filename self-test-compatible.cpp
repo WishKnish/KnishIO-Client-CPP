@@ -1315,34 +1315,38 @@ private:
                             std::string mlkem_json = molecules["mlkem768"].get<std::string>();
                             json mlkem_data = json::parse(mlkem_json);
 
-                            // Test encryption compatibility with their public key
-                            if (mlkem_data.contains("publicKey") && mlkem_data["publicKey"].is_string()) {
-                                std::string their_public_key = mlkem_data["publicKey"].get<std::string>();
+                            // STRONG cross-SDK check (cycle 138): decrypt THEIR encryptedData with our
+                            // TESTSEED wallet (all 8 SDKs share the keypair) and assert the plaintext —
+                            // real decrypt-interop, not the old weak encrypt-to-their-pubkey form.
+                            if (mlkem_data.contains("encryptedData") && mlkem_data["encryptedData"].is_object() &&
+                                mlkem_data.contains("originalPlaintext")) {
+                                // C++ AES-256-GCM is libsodium AES-NI-gated → guard (runs on this
+                                // Apple-Silicon host via ARMv8 AES; SKIP on AES-less envs, asserted on x86 CI).
+                                bool aes_gcm_available = (sodium_init() >= 0) && (crypto_aead_aes256gcm_is_available() != 0);
+                                if (!aes_gcm_available) {
+                                    Logger::message("    SKIPPED: " + sdk_name + " mlkem768 decryption — AES-256-GCM requires AES-NI (verified on x86 CI)", colors::YELLOW);
+                                } else {
+                                    auto our_secret = knishio::KnishIOClient::generateSecret("TESTSEED");
+                                    Wallet our_wallet(our_secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+                                    try {
+                                        std::map<std::string, std::string> enc = {
+                                            {"cipherText", mlkem_data["encryptedData"]["cipherText"].get<std::string>()},
+                                            {"encryptedMessage", mlkem_data["encryptedData"]["encryptedMessage"].get<std::string>()}
+                                        };
+                                        std::string decrypted = our_wallet.decryptMessageML768(enc);
+                                        bool decryption_success = (decrypted == mlkem_data["originalPlaintext"].get<std::string>());
 
-                                // Create our encryption wallet
-                                auto secret = knishio::KnishIOClient::generateSecret("TESTSEED");
-                                Wallet our_wallet(secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+                                        if (decryption_success) {
+                                            Logger::message("    ✅ Successfully decrypted " + sdk_name + "'s ML-KEM768 message", colors::GREEN);
+                                        }
 
-                                // Attempt to encrypt a message for their public key
-                                try {
-                                    auto encrypted = our_wallet.encryptMessageML768(
-                                        "Cross-platform encryption test",
-                                        their_public_key
-                                    );
+                                        Logger::test(sdk_name + " mlkem768 decryption compatibility", decryption_success);
+                                        if (!decryption_success) all_valid = false;
 
-                                    bool encryption_success = !encrypted["cipherText"].empty() &&
-                                                            !encrypted["encryptedMessage"].empty();
-
-                                    if (encryption_success) {
-                                        Logger::message("    ✅ Successfully encrypted for " + sdk_name + " public key", colors::GREEN);
+                                    } catch (const std::exception& e) {
+                                        Logger::test(sdk_name + " mlkem768 decryption compatibility", false, e.what());
+                                        all_valid = false;
                                     }
-
-                                    Logger::test(sdk_name + " mlkem768 encryption compatibility", encryption_success);
-                                    if (!encryption_success) all_valid = false;
-
-                                } catch (const std::exception& e) {
-                                    Logger::test(sdk_name + " mlkem768 encryption compatibility", false, e.what());
-                                    all_valid = false;
                                 }
                             }
                         } catch (const std::exception& e) {
