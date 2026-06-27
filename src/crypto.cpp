@@ -5,7 +5,12 @@
 #include "utility.h"
 
 /**
- * Encrypts the given message or data with the recipient's public key
+ * Encrypts the given message or data with the recipient's public key.
+ *
+ * Classical NaCl (libsodium crypto_box_seal), NON-post-quantum. This is the legacy
+ * sealed-box lineage, distinct from the canonical cross-SDK message envelope: the
+ * post-quantum ML-KEM768 envelope ({cipherText, encryptedMessage}, the form the
+ * cross-platform vectors assert) is Wallet::encryptMessageML768.
  *
  * @param messageUtf8 message encoded in UTF8
  * @param recipientPublicKey
@@ -57,7 +62,11 @@ std::string encryptMessage(const std::string &messageUtf8, const std::vector<uns
 }
 
 /**
- * Uses the given private key to decrypt an encrypted message
+ * Uses the given private key to decrypt an encrypted message.
+ *
+ * Classical NaCl (libsodium crypto_box_seal_open), NON-post-quantum — the counterpart
+ * to encryptMessage above. The canonical post-quantum ML-KEM768 envelope is
+ * Wallet::decryptMessageML768.
  *
  * @param {string} encryptedMessage hex string of encrypted data
  * @param {vector} recipientPublicKey
@@ -140,10 +149,14 @@ std::string decryptMessage(const std::string &encryptedMessage, const std::vecto
 }
 
 /**
- * Generates public and private key pair
+ * Generates public and private key pair.
+ *
+ * Classical NaCl (libsodium crypto_box_keypair), NON-post-quantum — the keypair for the
+ * classical crypto_box_seal path above. The post-quantum ML-KEM768 keypair is generated
+ * in Wallet (see Wallet::encryptMessageML768).
  *
  * @param publicKey public key (output parameter)
- * @param privateKey private key (output parameter)  
+ * @param privateKey private key (output parameter)
  * @returns success
  */
 bool generatePublicAndPrivateKeys(std::vector<unsigned char> &publicKey, std::vector<unsigned char> &privateKey)
