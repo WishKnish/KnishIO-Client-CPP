@@ -27,7 +27,6 @@
 #include <stdexcept>
 #include <cstdlib>
 #include <filesystem>
-#include <sodium.h>  // cycle 136: crypto_aead_aes256gcm_is_available() guard (AES-NI gate)
 
 // KnishIO SDK includes
 #include "src/KnishIOClient.h"
@@ -1039,20 +1038,8 @@ private:
             bool public_key_generated = !encryption_wallet.mlkem_public_key.empty();
             Logger::test("ML-KEM768 public key generation", public_key_generated);
 
-            // Cycle 136: C++ AES-256-GCM is libsodium AES-NI-gated → unavailable on ARM (no AES-NI).
-            // Skip the encrypt/decrypt roundtrip there (keygen still verified); x86 CI runs it fully.
-            bool aes_gcm_available = (sodium_init() >= 0) && (crypto_aead_aes256gcm_is_available() != 0);
-            if (!aes_gcm_available) {
-                Logger::message("  SKIPPED: ML-KEM768 encrypt/decrypt — AES-256-GCM requires AES-NI (verified on x86 CI)", colors::YELLOW);
-                results_.mlkem768 = {
-                    .passed = public_key_generated,
-                    .public_key_generated = public_key_generated,
-                    .encryption_success = false,
-                    .decryption_success = false,
-                    .plaintext_length = 44
-                };
-                return public_key_generated;
-            }
+            // Cycle 143: AES-256-GCM now runs via OpenSSL EVP (portable, no AES-NI gate) →
+            // the encrypt/decrypt roundtrip runs unconditionally on every platform.
 
             // JavaScript pattern: Test self-encryption
             auto public_key_b64 = toBase64(encryption_wallet.mlkem_public_key);
@@ -1093,11 +1080,11 @@ private:
         }
     }
 
-    // Test 5b (cycle 136): ML-KEM768 cross-SDK VECTOR assertion against the committed
-    // cross-platform-test-vectors.json — keygen pubkey == expectedPubkey + the frozen
-    // {cipherText,encryptedMessage} decrypts to expectedPlaintext. mlkem-native keygen is
-    // portable (runs on ARM); the AES-256-GCM decrypt is libsodium AES-NI-gated → guarded
-    // (asserted on x86 CI, SKIPPED on ARM). Reads the vendored vector; SKIPS if absent.
+    // Test 5b (cycle 136; cycle 143: AES-GCM via OpenSSL EVP): ML-KEM768 cross-SDK VECTOR
+    // assertion against the committed cross-platform-test-vectors.json — keygen pubkey ==
+    // expectedPubkey + the frozen {cipherText,encryptedMessage} decrypts to expectedPlaintext.
+    // Both mlkem-native keygen AND the EVP AES-256-GCM decrypt are portable → run on any
+    // platform (no AES-NI gate). Reads the vendored vector; SKIPS if absent.
     bool testMLKEM768VectorAssertion() {
         Logger::message("\n5b. ML-KEM768 Cross-SDK Vector Assertion", colors::BLUE);
         try {
@@ -1123,21 +1110,14 @@ private:
             bool keygen_ok = (pubkey_b64 == kg.at("expectedPubkey").get<std::string>());
             Logger::test("ML-KEM768 keygen pubkey matches vector", keygen_ok);
 
-            // --- decrypt assertion (libsodium AES-256-GCM is AES-NI-gated → guard) ---
-            bool decrypt_ok = false;
-            bool aes_gcm_available = (sodium_init() >= 0) && (crypto_aead_aes256gcm_is_available() != 0);
-            if (aes_gcm_available) {
-                std::map<std::string, std::string> enc = {
-                    {"cipherText", dec.at("cipherText").get<std::string>()},
-                    {"encryptedMessage", dec.at("encryptedMessage").get<std::string>()}
-                };
-                std::string plaintext = w.decryptMessageML768(enc);
-                decrypt_ok = (plaintext == dec.at("expectedPlaintext").get<std::string>());
-                Logger::test("ML-KEM768 frozen sample decrypts to vector plaintext", decrypt_ok);
-            } else {
-                Logger::message("  SKIPPED: ML-KEM768 decrypt — AES-256-GCM requires AES-NI (verified on x86 CI)", colors::YELLOW);
-                decrypt_ok = true; // skip = pass on ARM
-            }
+            // --- decrypt assertion (OpenSSL EVP AES-256-GCM is portable → always runs) ---
+            std::map<std::string, std::string> enc = {
+                {"cipherText", dec.at("cipherText").get<std::string>()},
+                {"encryptedMessage", dec.at("encryptedMessage").get<std::string>()}
+            };
+            std::string plaintext = w.decryptMessageML768(enc);
+            bool decrypt_ok = (plaintext == dec.at("expectedPlaintext").get<std::string>());
+            Logger::test("ML-KEM768 frozen sample decrypts to vector plaintext", decrypt_ok);
             return keygen_ok && decrypt_ok;
         } catch (const std::exception& e) {
             std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
@@ -1320,33 +1300,27 @@ private:
                             // real decrypt-interop, not the old weak encrypt-to-their-pubkey form.
                             if (mlkem_data.contains("encryptedData") && mlkem_data["encryptedData"].is_object() &&
                                 mlkem_data.contains("originalPlaintext")) {
-                                // C++ AES-256-GCM is libsodium AES-NI-gated → guard (runs on this
-                                // Apple-Silicon host via ARMv8 AES; SKIP on AES-less envs, asserted on x86 CI).
-                                bool aes_gcm_available = (sodium_init() >= 0) && (crypto_aead_aes256gcm_is_available() != 0);
-                                if (!aes_gcm_available) {
-                                    Logger::message("    SKIPPED: " + sdk_name + " mlkem768 decryption — AES-256-GCM requires AES-NI (verified on x86 CI)", colors::YELLOW);
-                                } else {
-                                    auto our_secret = knishio::KnishIOClient::generateSecret("TESTSEED");
-                                    Wallet our_wallet(our_secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-                                    try {
-                                        std::map<std::string, std::string> enc = {
-                                            {"cipherText", mlkem_data["encryptedData"]["cipherText"].get<std::string>()},
-                                            {"encryptedMessage", mlkem_data["encryptedData"]["encryptedMessage"].get<std::string>()}
-                                        };
-                                        std::string decrypted = our_wallet.decryptMessageML768(enc);
-                                        bool decryption_success = (decrypted == mlkem_data["originalPlaintext"].get<std::string>());
+                                // OpenSSL EVP AES-256-GCM is portable (no AES-NI gate) → always runs.
+                                auto our_secret = knishio::KnishIOClient::generateSecret("TESTSEED");
+                                Wallet our_wallet(our_secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+                                try {
+                                    std::map<std::string, std::string> enc = {
+                                        {"cipherText", mlkem_data["encryptedData"]["cipherText"].get<std::string>()},
+                                        {"encryptedMessage", mlkem_data["encryptedData"]["encryptedMessage"].get<std::string>()}
+                                    };
+                                    std::string decrypted = our_wallet.decryptMessageML768(enc);
+                                    bool decryption_success = (decrypted == mlkem_data["originalPlaintext"].get<std::string>());
 
-                                        if (decryption_success) {
-                                            Logger::message("    ✅ Successfully decrypted " + sdk_name + "'s ML-KEM768 message", colors::GREEN);
-                                        }
-
-                                        Logger::test(sdk_name + " mlkem768 decryption compatibility", decryption_success);
-                                        if (!decryption_success) all_valid = false;
-
-                                    } catch (const std::exception& e) {
-                                        Logger::test(sdk_name + " mlkem768 decryption compatibility", false, e.what());
-                                        all_valid = false;
+                                    if (decryption_success) {
+                                        Logger::message("    ✅ Successfully decrypted " + sdk_name + "'s ML-KEM768 message", colors::GREEN);
                                     }
+
+                                    Logger::test(sdk_name + " mlkem768 decryption compatibility", decryption_success);
+                                    if (!decryption_success) all_valid = false;
+
+                                } catch (const std::exception& e) {
+                                    Logger::test(sdk_name + " mlkem768 decryption compatibility", false, e.what());
+                                    all_valid = false;
                                 }
                             }
                         } catch (const std::exception& e) {

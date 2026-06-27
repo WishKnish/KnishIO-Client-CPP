@@ -7,6 +7,8 @@
 #include "third_party/nlohmann/json.hpp"
 #include "KnishIOClient.h"
 #include <sodium.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
 
 using json = nlohmann::json;
 
@@ -223,64 +225,64 @@ void Wallet::initializeMLKEM() {
 #endif
 }
 
-// AES-256-GCM encryption helper (matches C SDK implementation)
+// AES-256-GCM encryption helper (OpenSSL EVP — portable, no AES-NI gate; mirrors C's aes_gcm.c)
 // Format: [IV (12 bytes)][ciphertext][authentication tag (16 bytes)]
 std::vector<uint8_t> Wallet::encryptWithSharedSecret(const std::vector<uint8_t>& message, const std::vector<uint8_t>& shared_secret) {
     if (shared_secret.size() != 32) {
         throw std::invalid_argument("Shared secret must be 32 bytes for AES-256-GCM");
     }
 
-    // Initialize AES-256-GCM
-    if (crypto_aead_aes256gcm_is_available() == 0) {
-        throw std::runtime_error("AES-256-GCM not available on this platform");
-    }
-
-    // Generate random 12-byte IV (nonce)
     constexpr size_t IV_SIZE = 12;
     constexpr size_t TAG_SIZE = 16;
+
+    // Generate random 12-byte IV (nonce) via OpenSSL CSPRNG
     std::vector<uint8_t> iv(IV_SIZE);
-    randombytes_buf(iv.data(), IV_SIZE);
+    if (RAND_bytes(iv.data(), static_cast<int>(IV_SIZE)) != 1) {
+        throw std::runtime_error("AES-256-GCM: IV generation failed");
+    }
 
     // Prepare output buffer: [IV (12)][ciphertext][tag (16)]
     std::vector<uint8_t> output(IV_SIZE + message.size() + TAG_SIZE);
-
-    // Copy IV to beginning of output
     std::copy(iv.begin(), iv.end(), output.begin());
 
-    // Encrypt message with AES-256-GCM
-    unsigned long long ciphertext_len;
-    int result = crypto_aead_aes256gcm_encrypt(
-        output.data() + IV_SIZE,           // ciphertext destination
-        &ciphertext_len,                   // ciphertext length output
-        message.data(),                    // plaintext
-        message.size(),                    // plaintext length
-        nullptr,                           // additional data (none)
-        0,                                 // additional data length
-        nullptr,                           // secret nonce (unused)
-        iv.data(),                         // public nonce (IV)
-        shared_secret.data()               // 32-byte key
-    );
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (ctx == nullptr) {
+        throw std::runtime_error("AES-256-GCM: failed to allocate cipher context");
+    }
 
-    if (result != 0) {
+    int len = 0;
+    int ciphertext_len = 0;
+    bool ok =
+        EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1 &&
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(IV_SIZE), nullptr) == 1 &&
+        EVP_EncryptInit_ex(ctx, nullptr, nullptr, shared_secret.data(), iv.data()) == 1 &&
+        EVP_EncryptUpdate(ctx, output.data() + IV_SIZE, &len, message.data(), static_cast<int>(message.size())) == 1;
+    if (ok) {
+        ciphertext_len = len;
+        ok = EVP_EncryptFinal_ex(ctx, output.data() + IV_SIZE + ciphertext_len, &len) == 1;
+        ciphertext_len += len;
+    }
+    if (ok) {
+        // Append the 16-byte authentication tag after the ciphertext
+        ok = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, static_cast<int>(TAG_SIZE),
+                                 output.data() + IV_SIZE + ciphertext_len) == 1;
+    }
+    EVP_CIPHER_CTX_free(ctx);
+
+    if (!ok) {
         throw std::runtime_error("AES-256-GCM encryption failed");
     }
 
-    // Resize output to actual length (should be IV_SIZE + ciphertext_len which includes tag)
-    output.resize(IV_SIZE + ciphertext_len);
-
+    // Final layout: [IV (12)][ciphertext][tag (16)]
+    output.resize(IV_SIZE + static_cast<size_t>(ciphertext_len) + TAG_SIZE);
     return output;
 }
 
-// AES-256-GCM decryption helper (matches C SDK implementation)
+// AES-256-GCM decryption helper (OpenSSL EVP — portable, no AES-NI gate; mirrors C's aes_gcm.c)
 // Format: [IV (12 bytes)][ciphertext][authentication tag (16 bytes)]
 std::vector<uint8_t> Wallet::decryptWithSharedSecret(const std::vector<uint8_t>& encrypted_message, const std::vector<uint8_t>& shared_secret) {
     if (shared_secret.size() != 32) {
         throw std::invalid_argument("Shared secret must be 32 bytes for AES-256-GCM");
-    }
-
-    // Initialize AES-256-GCM
-    if (crypto_aead_aes256gcm_is_available() == 0) {
-        throw std::runtime_error("AES-256-GCM not available on this platform");
     }
 
     constexpr size_t IV_SIZE = 12;
@@ -291,37 +293,44 @@ std::vector<uint8_t> Wallet::decryptWithSharedSecret(const std::vector<uint8_t>&
         throw std::invalid_argument("Encrypted message too short for AES-256-GCM format");
     }
 
-    // Extract IV from beginning
+    // Split [IV (12)][ciphertext][tag (16)]
     const uint8_t* iv = encrypted_message.data();
+    const uint8_t* ciphertext = encrypted_message.data() + IV_SIZE;
+    const size_t ciphertext_len = encrypted_message.size() - IV_SIZE - TAG_SIZE;
+    const uint8_t* tag = encrypted_message.data() + encrypted_message.size() - TAG_SIZE;
 
-    // Extract ciphertext + tag (everything after IV)
-    const uint8_t* ciphertext_with_tag = encrypted_message.data() + IV_SIZE;
-    size_t ciphertext_with_tag_len = encrypted_message.size() - IV_SIZE;
+    std::vector<uint8_t> plaintext(ciphertext_len);
 
-    // Prepare output buffer for plaintext
-    std::vector<uint8_t> plaintext(ciphertext_with_tag_len);
-    unsigned long long plaintext_len;
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (ctx == nullptr) {
+        throw std::runtime_error("AES-256-GCM: failed to allocate cipher context");
+    }
 
-    // Decrypt message with AES-256-GCM (automatically verifies authentication tag)
-    int result = crypto_aead_aes256gcm_decrypt(
-        plaintext.data(),                  // plaintext destination
-        &plaintext_len,                    // plaintext length output
-        nullptr,                           // secret nonce (unused)
-        ciphertext_with_tag,               // ciphertext + tag
-        ciphertext_with_tag_len,           // ciphertext + tag length
-        nullptr,                           // additional data (none)
-        0,                                 // additional data length
-        iv,                                // public nonce (IV)
-        shared_secret.data()               // 32-byte key
-    );
+    int len = 0;
+    int plaintext_len = 0;
+    int ret = 0;
+    bool ok =
+        EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1 &&
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(IV_SIZE), nullptr) == 1 &&
+        EVP_DecryptInit_ex(ctx, nullptr, nullptr, shared_secret.data(), iv) == 1 &&
+        EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext, static_cast<int>(ciphertext_len)) == 1;
+    if (ok) {
+        plaintext_len = len;
+        // Set the expected authentication tag, then finalize (verifies the tag)
+        ok = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, static_cast<int>(TAG_SIZE),
+                                 const_cast<uint8_t*>(tag)) == 1;
+    }
+    if (ok) {
+        ret = EVP_DecryptFinal_ex(ctx, plaintext.data() + plaintext_len, &len);
+    }
+    EVP_CIPHER_CTX_free(ctx);
 
-    if (result != 0) {
+    if (!ok || ret <= 0) {
         throw std::runtime_error("AES-256-GCM decryption failed: authentication tag mismatch");
     }
 
-    // Resize to actual plaintext length
-    plaintext.resize(plaintext_len);
-
+    plaintext_len += len;
+    plaintext.resize(static_cast<size_t>(plaintext_len));
     return plaintext;
 }
 

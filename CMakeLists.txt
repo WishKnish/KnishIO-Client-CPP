@@ -82,6 +82,9 @@ endif()
 # Required dependencies
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
+# OpenSSL for portable AES-256-GCM (EVP) — replaces libsodium's AES-NI-gated AEAD
+# so ML-KEM message decrypt runs on any platform (mirrors the C SDK).
+find_package(OpenSSL REQUIRED)
 
 message(STATUS "Found CURL: HTTP client support enabled")
 set(KNISHIO_HTTP_SUPPORT ON)
@@ -177,9 +180,10 @@ foreach(MLKEM_FILE ${MLKEM_NATIVE_SOURCES})
 endforeach()
 
 # Link libraries
-target_link_libraries(knishio-client-cpp 
-    PUBLIC 
+target_link_libraries(knishio-client-cpp
+    PUBLIC
         PkgConfig::SODIUM
+        OpenSSL::Crypto
         CURL::libcurl
         Threads::Threads
 )
@@ -216,9 +220,10 @@ target_compile_features(knishio-client-cpp-static PUBLIC cxx_std_20)
 # mlkem-native configuration for static library
 target_compile_definitions(knishio-client-cpp-static PUBLIC HAVE_MLKEM_NATIVE=1)
 
-target_link_libraries(knishio-client-cpp-static 
-    PUBLIC 
+target_link_libraries(knishio-client-cpp-static
+    PUBLIC
         PkgConfig::SODIUM
+        OpenSSL::Crypto
         CURL::libcurl
         Threads::Threads
 )
