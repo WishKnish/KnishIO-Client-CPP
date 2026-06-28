@@ -1,5 +1,6 @@
 #include "Molecule.h"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -215,6 +216,145 @@ std::vector<Atom> Molecule::initValues(const Wallet &sourceWallet, const std::ve
 			"walletBundle",
 			remainderWallet.bundle,
 			remainderMeta,  // tokenUnits (KEPT) for stackable; empty for fungible
+			"",
+			index)
+	);
+
+	return this->atoms;
+}
+
+// Buffer deposit (V-B-V), port of JS Molecule.initDepositBuffer. Conserves -balance + amount +
+// (balance-amount) == 0; the B atom carries the balancing weight, so verifyTokenIsotopeV bypasses the
+// V-only sum when a B/F atom is present. The buffer + remainder wallets are created by the caller.
+std::vector<Atom> Molecule::initDepositBuffer(const Wallet &sourceWallet, const Wallet &bufferWallet, const Wallet &remainderWallet, const std::string &amount, const std::vector<std::pair<std::string, std::string>> &tradeRates)
+{
+	this->molecularHash.clear();
+
+	// V atom: debit the FULL balance from source (UTXO; the change is routed to the remainder V atom
+	// below). No meta — mirrors the JS/initValue source debit atom (hash-neutral).
+	this->atoms.push_back
+	(
+		Atom(sourceWallet.position,
+			sourceWallet.address,
+			"V",
+			sourceWallet.token,
+			"-" + sourceWallet.balance,
+			sourceWallet.batchId,
+			"",  // metaType - empty for the source debit atom
+			"",  // metaId
+			{},  // no meta
+			"",  // otsFragment - set during signing
+			0)
+	);
+
+	// B atom: credit the buffer wallet with `amount`. tradeRates serialize into the atom meta ONLY when
+	// non-empty (JS AtomMeta.setAtomWallet parity); empty -> hash-neutral (the self-test path).
+	std::vector<std::pair<std::string, std::string>> bufferMeta;
+	if (!tradeRates.empty()) {
+		nlohmann::json rates = nlohmann::json::object();
+		for (const auto &kv : tradeRates) {
+			rates[kv.first] = kv.second;
+		}
+		bufferMeta.push_back({"tradeRates", rates.dump()});
+	}
+	this->atoms.push_back
+	(
+		Atom(bufferWallet.position,
+			bufferWallet.address,
+			"B",
+			bufferWallet.token,
+			amount,
+			bufferWallet.batchId,
+			"walletBundle",
+			sourceWallet.bundle,
+			bufferMeta,
+			"",
+			1)
+	);
+
+	// V atom: route the change (balance - amount) back to the SOURCE bundle via the remainder wallet
+	// (JS initDepositBuffer remainder metaId == sourceWallet.bundle, NOT the remainder's own bundle).
+	auto remainderAmount = std::stoll(sourceWallet.balance) - std::stoll(amount);
+	this->atoms.push_back
+	(
+		Atom(remainderWallet.position,
+			remainderWallet.address,
+			"V",
+			remainderWallet.token,
+			std::to_string(remainderAmount),
+			remainderWallet.batchId,
+			"walletBundle",
+			sourceWallet.bundle,
+			{},
+			"",
+			2)
+	);
+
+	return this->atoms;
+}
+
+// Buffer withdraw (B-V..V-B), port of JS Molecule.initWithdrawBuffer. Full-balance debit (JS parity)
+// conserves for partial withdraws too: -balance + Σamounts + (balance-Σ) == 0. recipientWallets are
+// shadow wallets (their batchId/bundle are read here; the JS "source.batchId ? freshBatchId" rule is
+// applied by the client wrapper that builds them).
+std::vector<Atom> Molecule::initWithdrawBuffer(const Wallet &sourceWallet, const std::vector<Wallet> &recipientWallets, const std::vector<std::string> &amounts, const Wallet &remainderWallet)
+{
+	this->molecularHash.clear();
+
+	int index = 0;
+
+	// B atom: debit the FULL balance from the source (buffer) wallet. metaType walletBundle -> source bundle.
+	this->atoms.push_back
+	(
+		Atom(sourceWallet.position,
+			sourceWallet.address,
+			"B",
+			sourceWallet.token,
+			"-" + sourceWallet.balance,
+			sourceWallet.batchId,
+			"walletBundle",
+			sourceWallet.bundle,
+			{},
+			"",
+			index++)
+	);
+
+	// One V atom per recipient (shadow): +amount, token from the SOURCE (JS: this.sourceWallet.token),
+	// walletBundle -> recipient bundle.
+	long long total = 0;
+	for (size_t i = 0; i < recipientWallets.size(); ++i) {
+		const Wallet &recipientWallet = recipientWallets[i];
+		const std::string &amount = amounts[i];
+		total += std::stoll(amount);
+		this->atoms.push_back
+		(
+			Atom(recipientWallet.position,
+				recipientWallet.address,
+				"V",
+				sourceWallet.token,
+				amount,
+				recipientWallet.batchId,
+				"walletBundle",
+				recipientWallet.bundle,
+				{},
+				"",
+				index++)
+		);
+	}
+
+	// B atom: remainder holds (balance - Σamounts), walletBundle -> remainder bundle.
+	auto remainderAmount = std::stoll(sourceWallet.balance) - total;
+	this->atoms.push_back
+	(
+		Atom(remainderWallet.position,
+			remainderWallet.address,
+			"B",
+			remainderWallet.token,
+			std::to_string(remainderAmount),
+			remainderWallet.batchId,
+			"walletBundle",
+			remainderWallet.bundle,
+			{},
 			"",
 			index)
 	);
@@ -774,7 +914,18 @@ bool Molecule::verifyTokenIsotopeV(const Molecule &molecule)
 	{
 		return false;
 	}
-	
+
+	// Cross-isotope (buffer-family) molecules carry the balancing weight on B/F atoms, so the V-only
+	// sum is non-zero by construction. Bypass the V-conservation check when a B or F atom is present
+	// (validator-enforced full conservation; JS CheckMolecule.isotopeV / Kotlin c145 parity). Gated on
+	// hasCrossIsotope -> V-only molecules take the identical path below (the frozen hashes are unaffected).
+	bool hasCrossIsotope = std::any_of(molecule.atoms.begin(), molecule.atoms.end(),
+		[](const Atom &a){ return a.isotope == "B" || a.isotope == "F"; });
+	if (hasCrossIsotope)
+	{
+		return true;
+	}
+
 	// summ of V-isotope values for each token should be 0
 	for (auto itAtom = molecule.atoms.begin(); itAtom != molecule.atoms.end(); ++itAtom)
 	{

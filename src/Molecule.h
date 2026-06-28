@@ -25,6 +25,16 @@ public:
 	std::vector<Atom> initMeta(const Wallet &wallet, const std::vector<std::pair<std::string, std::string>> &meta, const std::string &metaType, const std::string &metaId);
 	std::vector<Atom> initWalletCreation(const Wallet &sourceWallet, const Wallet &wallet, const std::vector<std::pair<std::string, std::string>> &atomMeta = {});
 	std::vector<Atom> initShadowWalletClaim(const Wallet &sourceWallet, const Wallet &wallet);
+	// Buffer-family (B-isotope) builders, ports of JS Molecule.initDepositBuffer / initWithdrawBuffer.
+	// Deposit: V (source -balance) -> B (buffer +amount) -> V (remainder +(balance-amount)). Conserves
+	// to 0 across V+B; the B atom carries the balancing weight (so verifyTokenIsotopeV bypasses the
+	// V-only sum when a B/F atom is present). tradeRates serialize into the buffer atom meta only when
+	// non-empty (JS AtomMeta.setAtomWallet parity); empty -> hash-neutral.
+	std::vector<Atom> initDepositBuffer(const Wallet &sourceWallet, const Wallet &bufferWallet, const Wallet &remainderWallet, const std::string &amount, const std::vector<std::pair<std::string, std::string>> &tradeRates = {});
+	// Withdraw: B (source -balance) -> N x V (recipient shadow +amount) -> B (remainder +(balance-Σ)).
+	// recipientWallets is parallel to amounts; full-balance debit (JS parity) conserves for partial
+	// withdraws too: -balance + Σamounts + (balance-Σ) == 0.
+	std::vector<Atom> initWithdrawBuffer(const Wallet &sourceWallet, const std::vector<Wallet> &recipientWallets, const std::vector<std::string> &amounts, const Wallet &remainderWallet);
 	std::vector<Atom> initAuthorization(const Wallet &sourceWallet, bool encrypt = false);
 
 	std::string sign(const std::string &secret, bool anonymous = false);

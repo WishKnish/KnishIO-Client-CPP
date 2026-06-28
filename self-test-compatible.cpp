@@ -124,6 +124,7 @@ struct TestResults {
     MoleculeTestResult token_creation;
     MoleculeTestResult wallet_creation;
     MoleculeTestResult shadow_wallet_claim;
+    MoleculeTestResult buffer_family;
     MLKEMTestResult mlkem768;
     NegativeTestResult negative_cases;
     std::string molecules_metadata;
@@ -471,6 +472,7 @@ public:
         bool token_result = testTokenCreation();
         bool wallet_result = testWalletCreation();
         bool shadow_result = testShadowWalletClaim();
+        bool buffer_result = testBufferFamily();
         bool mlkem_result = testMLKEM768();
         bool mlkem_vector_result = testMLKEM768VectorAssertion();
         bool negative_result = testNegativeCases();
@@ -486,10 +488,11 @@ public:
         displaySummary();
 
         // Return success if all tests passed
-        int total_tests = 10;  // crypto + 3 base + 3 extended (token/wallet/shadow) + ML-KEM768 + ML-KEM768 vector + negative
+        int total_tests = 11;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + ML-KEM768 vector + negative
         int passed_tests = (crypto_result ? 1 : 0) + (meta_result ? 1 : 0) +
                           (simple_result ? 1 : 0) + (complex_result ? 1 : 0) +
                           (token_result ? 1 : 0) + (wallet_result ? 1 : 0) + (shadow_result ? 1 : 0) +
+                          (buffer_result ? 1 : 0) +
                           (mlkem_result ? 1 : 0) + (mlkem_vector_result ? 1 : 0) + (negative_result ? 1 : 0);
 
         return (passed_tests == total_tests);
@@ -626,6 +629,83 @@ private:
             
         } catch (const std::exception& e) {
             results_.meta_creation.validation_error = e.what();
+            std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
+            return false;
+        }
+    }
+
+    // Buffer family (B-isotope) builders + the verifyTokenIsotopeV cross-isotope bypass. These molecular
+    // hashes are NOT frozen (positions are randomly generated); we assert only that the V+B / B+V
+    // molecules sign and verify — i.e. that Molecule::verify accepts a cross-isotope molecule whose
+    // V-only atoms do NOT sum to zero (the bypass), and that the atom shapes match the JS reference.
+    bool testBufferFamily() {
+        Logger::message("\nB1. Buffer Family Test (deposit + withdraw)", colors::BLUE);
+
+        try {
+            auto secret = knishio::KnishIOClient::generateSecret("buffer-family-self-test-seed");
+            const std::string token = "BUFFER";
+
+            // ---- DEPOSIT: V (-100) -> B (+40) -> V (+60) ----
+            Wallet deposit_source(secret, token);   // fresh source (auto position -> valid OTS key)
+            deposit_source.balance = "100";
+            Wallet deposit_buffer(secret, token);    // fresh buffer wallet (B-isotope)
+            Wallet deposit_remainder(secret, token); // fresh remainder wallet
+
+            Molecule deposit;
+            deposit.sourceWallet = std::make_shared<Wallet>(deposit_source);
+            deposit.remainderWallet = std::make_shared<Wallet>(deposit_remainder);
+            deposit.initDepositBuffer(deposit_source, deposit_buffer, deposit_remainder, "40");
+            setFixedTimestamps(deposit);
+            auto deposit_sig = deposit.sign(secret, false);
+            Logger::test("Deposit molecule signing", !deposit_sig.empty());
+
+            bool deposit_shape = deposit.atoms.size() == 3
+                && deposit.atoms[0].isotope == "V" && deposit.atoms[0].value == "-100"
+                && deposit.atoms[1].isotope == "B" && deposit.atoms[1].value == "40"
+                && deposit.atoms[2].isotope == "V" && deposit.atoms[2].value == "60";
+            Logger::test("Deposit atom shape [V-100, B+40, V+60]", deposit_shape);
+
+            bool deposit_valid = Molecule::verify(deposit);
+            Logger::test("Deposit molecule validation (cross-isotope bypass)", deposit_valid);
+
+            // ---- WITHDRAW: B (-100) -> V (+40) -> B (+60) ----
+            Wallet withdraw_source(secret, token);   // the buffer wallet: B-isotope source AND remainder
+            withdraw_source.balance = "100";
+            Wallet withdraw_recipient(secret, token); // shadow: caller's own bundle, no position/address
+            withdraw_recipient.bundle = withdraw_source.bundle;
+            withdraw_recipient.address = "";
+            withdraw_recipient.position = "";
+
+            Molecule withdraw;
+            withdraw.sourceWallet = std::make_shared<Wallet>(withdraw_source);
+            withdraw.remainderWallet = std::make_shared<Wallet>(withdraw_source);
+            withdraw.initWithdrawBuffer(withdraw_source, {withdraw_recipient}, {"40"}, withdraw_source);
+            setFixedTimestamps(withdraw);
+            auto withdraw_sig = withdraw.sign(secret, false);
+            Logger::test("Withdraw molecule signing", !withdraw_sig.empty());
+
+            bool withdraw_shape = withdraw.atoms.size() == 3
+                && withdraw.atoms[0].isotope == "B" && withdraw.atoms[0].value == "-100"
+                && withdraw.atoms[1].isotope == "V" && withdraw.atoms[1].value == "40"
+                && withdraw.atoms[2].isotope == "B" && withdraw.atoms[2].value == "60";
+            Logger::test("Withdraw atom shape [B-100, V+40, B+60]", withdraw_shape);
+
+            bool withdraw_valid = Molecule::verify(withdraw);
+            Logger::test("Withdraw molecule validation (cross-isotope bypass)", withdraw_valid);
+
+            bool all_pass = deposit_shape && deposit_valid && withdraw_shape && withdraw_valid;
+
+            results_.buffer_family = {
+                .passed = all_pass,
+                .molecular_hash = deposit.molecularHash,
+                .atom_count = static_cast<int>(deposit.atoms.size() + withdraw.atoms.size()),
+                .validation_error = all_pass ? "null" : "buffer family validation failed"
+            };
+
+            return all_pass;
+
+        } catch (const std::exception& e) {
+            results_.buffer_family.validation_error = e.what();
             std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
             return false;
         }
@@ -1481,7 +1561,7 @@ private:
         std::cout << "Timestamp: " << results_.timestamp << std::endl;
         
         // Count passed tests
-        int total_tests = 9;  // crypto + 3 base + 3 extended (token/wallet/shadow) + ML-KEM768 + negative
+        int total_tests = 10;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + negative
         int passed_tests = 0;
         if (results_.crypto.passed) passed_tests++;
         if (results_.meta_creation.passed) passed_tests++;
@@ -1490,6 +1570,7 @@ private:
         if (results_.token_creation.passed) passed_tests++;
         if (results_.wallet_creation.passed) passed_tests++;
         if (results_.shadow_wallet_claim.passed) passed_tests++;
+        if (results_.buffer_family.passed) passed_tests++;
         if (results_.mlkem768.passed) passed_tests++;
         if (results_.negative_cases.passed) passed_tests++;
         
@@ -1519,6 +1600,9 @@ private:
             }
             if (!results_.shadow_wallet_claim.passed) {
                 std::cout << "  - shadowWalletClaim: Validation failed" << std::endl;
+            }
+            if (!results_.buffer_family.passed) {
+                std::cout << "  - bufferFamily: " << results_.buffer_family.validation_error << std::endl;
             }
             if (!results_.mlkem768.passed) {
                 std::cout << "  - mlkem768: " << results_.mlkem768.error << std::endl;

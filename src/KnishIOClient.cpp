@@ -767,6 +767,87 @@ KnishIOClient::burnToken(const std::string& token, double amount, const std::vec
     });
 }
 
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::depositBufferToken(const std::string& token, double amount,
+                                 const std::vector<std::pair<std::string, std::string>>& tradeRates) {
+    return std::async(std::launch::async, [this, token, amount, tradeRates]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+        const std::string senderBundle = getBundle();
+
+        // SOURCE: the bundle's on-ledger token wallet (registered create position; the V-isotope signer
+        // must sign there). Resolved live via the Balance query.
+        TokenWalletInfo src = resolveTokenWallet(senderBundle, token);
+        if (!src.found) {
+            throw KnishIOException("No spendable wallet for token " + token);
+        }
+        const long long amountLL = static_cast<long long>(amount);
+        long long srcBalance = 0;
+        try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
+        if (srcBalance < amountLL) {
+            throw KnishIOException("Insufficient balance for token " + token);
+        }
+
+        Wallet source(sec, token, src.position);  // re-derives the registered address
+        source.balance = src.balance;             // initDepositBuffer debits the full balance (UTXO)
+
+        // BUFFER: a FRESH same-token wallet that receives the deposited amount (B-isotope).
+        Wallet buffer(sec, token);
+
+        // REMAINDER: a FRESH same-token wallet holding (balance - amount).
+        Wallet remainder(sec, token);
+
+        // V-B-V buffer-deposit molecule (NO ContinuID I-atom).
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initDepositBuffer(source, buffer, remainder, std::to_string(amountLL), tradeRates);
+
+        log("INFO", "Depositing " + std::to_string(amountLL) + " " + token + " into buffer");
+        return submitMolecule(mol);
+    });
+}
+
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::withdrawBufferToken(const std::string& token, double amount) {
+    return std::async(std::launch::async, [this, token, amount]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+        const std::string senderBundle = getBundle();
+
+        // SOURCE: the bundle's on-ledger BUFFER wallet, resolved live via the Balance query.
+        TokenWalletInfo src = resolveTokenWallet(senderBundle, token);
+        if (!src.found) {
+            throw KnishIOException("No spendable buffer wallet for token " + token);
+        }
+        const long long amountLL = static_cast<long long>(amount);
+        long long srcBalance = 0;
+        try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
+        if (srcBalance < amountLL) {
+            throw KnishIOException("Insufficient buffer balance for token " + token);
+        }
+
+        Wallet source(sec, token, src.position);  // the buffer wallet (B-isotope source AND remainder)
+        source.balance = src.balance;             // initWithdrawBuffer debits the full balance (UTXO)
+
+        // RECIPIENT: the caller's OWN bundle (JS: recipients = { getBundle(): amount }). Shadow wallet
+        // (no position/address); the validator credits the withdrawn amount back to this bundle.
+        Wallet recipient(sec, token);
+        recipient.bundle = senderBundle;
+        recipient.address = "";
+        recipient.position = "";
+
+        // B-V-B: the buffer wallet is BOTH source and remainder (JS: remainderWallet = sourceWallet).
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(source);
+        mol.initWithdrawBuffer(source, {recipient}, {std::to_string(amountLL)}, source);
+
+        log("INFO", "Withdrawing " + std::to_string(amountLL) + " " + token + " from buffer");
+        return submitMolecule(mol);
+    });
+}
+
 // Authentication
 std::future<std::unique_ptr<response::ResponseRequestAuthorization>>
 KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,

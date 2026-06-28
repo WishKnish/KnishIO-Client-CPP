@@ -266,6 +266,39 @@ public:
     burnToken(const std::string& token, double amount, const std::vector<std::string>& units = {});
 
     /**
+     * Deposit tokens into a buffer wallet (mirroring JS depositBufferToken).
+     *
+     * Builds a V-B-V molecule via Molecule::initDepositBuffer: the source token wallet (resolved live
+     * via the Balance query) is debited its full balance, @p amount is credited to a FRESH buffer
+     * wallet (B-isotope, walletBundle -> source bundle), and a fresh remainder wallet holds the change.
+     * Conserves to 0 across V+B.
+     *
+     * @param token Token slug to deposit
+     * @param amount Amount to move into the buffer
+     * @param tradeRates Optional buffer trade-rate meta (serialized into the B atom only when non-empty)
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    depositBufferToken(const std::string& token, double amount,
+                       const std::vector<std::pair<std::string, std::string>>& tradeRates = {});
+
+    /**
+     * Withdraw tokens from a buffer wallet back to the caller's own bundle (mirroring JS
+     * withdrawBufferToken).
+     *
+     * Builds a B-V-B molecule via Molecule::initWithdrawBuffer: the source (buffer) wallet is debited
+     * its full balance (B-isotope), @p amount is credited to the caller's own bundle (V-isotope shadow,
+     * walletBundle -> own bundle), and the buffer wallet itself is the remainder (B-isotope) holding
+     * the change. Conserves to 0 across B+V.
+     *
+     * @param token Token slug to withdraw
+     * @param amount Amount to withdraw from the buffer
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    withdrawBufferToken(const std::string& token, double amount);
+
+    /**
      * Create a new wallet on the ledger (C-isotope metaType "wallet" + ContinuID)
      * @param token Token slug for the new wallet
      * @return Future containing the ProposeMolecule response (use isAccepted())
