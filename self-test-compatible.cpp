@@ -634,72 +634,104 @@ private:
         }
     }
 
-    // Buffer family (B-isotope) builders + the verifyTokenIsotopeV cross-isotope bypass. These molecular
-    // hashes are NOT frozen (positions are randomly generated); we assert only that the V+B / B+V
-    // molecules sign and verify — i.e. that Molecule::verify accepts a cross-isotope molecule whose
-    // V-only atoms do NOT sum to zero (the bypass), and that the atom shapes match the JS reference.
+    // Buffer family (B-isotope) builders + the verifyTokenIsotopeV cross-isotope bypass — VECTOR-DRIVEN
+    // (cycle 151) against the shared canonical-patent-vectors.json, matching the other SDKs
+    // (JS/TS/PHP/Kotlin/Rust/Python). For each buffer_deposit_conservation / buffer_withdraw_conservation
+    // case we build + sign the molecule and assert: atom shape/values match the vector, the V+B sum == 0
+    // (full-balance debit conserves even for a PARTIAL op), AND Molecule::verify() accepts the molecule
+    // (the hasCrossIsotope bypass — V-only atoms don't sum to 0). Molecular hashes are NOT frozen
+    // (random positions). Reads the vendored fixture; SKIPS if absent (standalone CI).
     bool testBufferFamily() {
-        Logger::message("\nB1. Buffer Family Test (deposit + withdraw)", colors::BLUE);
+        Logger::message("\nB1. Buffer Family Test (deposit + withdraw, vector-driven)", colors::BLUE);
 
         try {
-            auto secret = knishio::KnishIOClient::generateSecret("buffer-family-self-test-seed");
-            const std::string token = "BUFFER";
+            std::vector<std::string> candidates;
+            if (const char* env = std::getenv("KNISHIO_CANONICAL_VECTORS")) candidates.emplace_back(env);
+            candidates.emplace_back("tests/fixtures/canonical-patent-vectors.json");
+            if (const char* sd = std::getenv("KNISHIO_SHARED_RESULTS")) candidates.emplace_back(std::string(sd) + "/canonical-patent-vectors.json");
 
-            // ---- DEPOSIT: V (-100) -> B (+40) -> V (+60) ----
-            Wallet deposit_source(secret, token);   // fresh source (auto position -> valid OTS key)
-            deposit_source.balance = "100";
-            Wallet deposit_buffer(secret, token);    // fresh buffer wallet (B-isotope)
-            Wallet deposit_remainder(secret, token); // fresh remainder wallet
+            std::ifstream f;
+            for (const auto& p : candidates) { f.open(p); if (f.is_open()) break; f.clear(); }
+            if (!f.is_open()) {
+                Logger::message("  SKIPPED: canonical-patent-vectors.json absent (standalone CI)", colors::YELLOW);
+                return true; // skip, not fail
+            }
+            json vectors = json::parse(f);
+            const auto& v = vectors.at("vectors");
 
-            Molecule deposit;
-            deposit.sourceWallet = std::make_shared<Wallet>(deposit_source);
-            deposit.remainderWallet = std::make_shared<Wallet>(deposit_remainder);
-            deposit.initDepositBuffer(deposit_source, deposit_buffer, deposit_remainder, "40");
-            setFixedTimestamps(deposit);
-            auto deposit_sig = deposit.sign(secret, false);
-            Logger::test("Deposit molecule signing", !deposit_sig.empty());
+            const std::string secret = knishio::KnishIOClient::generateSecret("buffer-family-self-test-seed");
+            const std::string token = "BUFTOK";
+            bool all_pass = true;
+            std::string last_hash;
+            int atom_total = 0;
 
-            bool deposit_shape = deposit.atoms.size() == 3
-                && deposit.atoms[0].isotope == "V" && deposit.atoms[0].value == "-100"
-                && deposit.atoms[1].isotope == "B" && deposit.atoms[1].value == "40"
-                && deposit.atoms[2].isotope == "V" && deposit.atoms[2].value == "60";
-            Logger::test("Deposit atom shape [V-100, B+40, V+60]", deposit_shape);
+            // ---- DEPOSIT: V (source -balance) -> B (buffer +amount) -> V (remainder +(balance-amount)) ----
+            for (const auto& tv : v.at("buffer_deposit_conservation").at("tests")) {
+                const std::string name = tv.at("name").get<std::string>();
+                const std::string balance = std::to_string(tv.at("sourceBalance").get<long long>());
+                const std::string amount = std::to_string(tv.at("amount").get<long long>());
 
-            bool deposit_valid = Molecule::verify(deposit);
-            Logger::test("Deposit molecule validation (cross-isotope bypass)", deposit_valid);
+                Wallet source(secret, token);   // fresh source (auto position -> valid OTS key)
+                source.balance = balance;
+                Wallet buffer(secret, token);    // fresh buffer wallet (B-isotope)
+                Wallet remainder(secret, token); // fresh remainder wallet
 
-            // ---- WITHDRAW: B (-100) -> V (+40) -> B (+60) ----
-            Wallet withdraw_source(secret, token);   // the buffer wallet: B-isotope source AND remainder
-            withdraw_source.balance = "100";
-            Wallet withdraw_recipient(secret, token); // shadow: caller's own bundle, no position/address
-            withdraw_recipient.bundle = withdraw_source.bundle;
-            withdraw_recipient.address = "";
-            withdraw_recipient.position = "";
+                Molecule mol;
+                mol.sourceWallet = std::make_shared<Wallet>(source);
+                mol.remainderWallet = std::make_shared<Wallet>(remainder);
+                mol.initDepositBuffer(source, buffer, remainder, amount);
+                setFixedTimestamps(mol);
+                mol.sign(secret, false);
 
-            Molecule withdraw;
-            withdraw.sourceWallet = std::make_shared<Wallet>(withdraw_source);
-            withdraw.remainderWallet = std::make_shared<Wallet>(withdraw_source);
-            withdraw.initWithdrawBuffer(withdraw_source, {withdraw_recipient}, {"40"}, withdraw_source);
-            setFixedTimestamps(withdraw);
-            auto withdraw_sig = withdraw.sign(secret, false);
-            Logger::test("Withdraw molecule signing", !withdraw_sig.empty());
+                long long sum = 0;
+                for (const auto& a : mol.atoms) if (a.isotope == "V" || a.isotope == "B") sum += std::stoll(a.value);
+                bool shape = mol.atoms.size() == 3
+                    && mol.atoms[0].isotope == "V" && mol.atoms[0].value == tv.at("expectedSourceValue").get<std::string>()
+                    && mol.atoms[1].isotope == "B" && mol.atoms[1].value == tv.at("expectedBufferValue").get<std::string>()
+                    && mol.atoms[2].isotope == "V" && mol.atoms[2].value == tv.at("expectedRemainderValue").get<std::string>();
+                bool ok = shape && std::to_string(sum) == tv.at("expectedSum").get<std::string>() && Molecule::verify(mol);
+                Logger::test("deposit " + name + " conserves (V+B sum 0; cross-isotope bypass)", ok);
+                all_pass = all_pass && ok;
+                last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
+            }
 
-            bool withdraw_shape = withdraw.atoms.size() == 3
-                && withdraw.atoms[0].isotope == "B" && withdraw.atoms[0].value == "-100"
-                && withdraw.atoms[1].isotope == "V" && withdraw.atoms[1].value == "40"
-                && withdraw.atoms[2].isotope == "B" && withdraw.atoms[2].value == "60";
-            Logger::test("Withdraw atom shape [B-100, V+40, B+60]", withdraw_shape);
+            // ---- WITHDRAW: B (source -balance) -> V (recipient +amount) -> B (remainder +(balance-amount)) ----
+            for (const auto& tv : v.at("buffer_withdraw_conservation").at("tests")) {
+                const std::string name = tv.at("name").get<std::string>();
+                const std::string balance = std::to_string(tv.at("sourceBalance").get<long long>());
+                const std::string amount = std::to_string(tv.at("amount").get<long long>());
 
-            bool withdraw_valid = Molecule::verify(withdraw);
-            Logger::test("Withdraw molecule validation (cross-isotope bypass)", withdraw_valid);
+                Wallet source(secret, token);   // the buffer wallet: B-isotope source AND remainder
+                source.balance = balance;
+                Wallet recipient(secret, token); // shadow: caller's own bundle, no position/address
+                recipient.bundle = source.bundle;
+                recipient.address = "";
+                recipient.position = "";
 
-            bool all_pass = deposit_shape && deposit_valid && withdraw_shape && withdraw_valid;
+                Molecule mol;
+                mol.sourceWallet = std::make_shared<Wallet>(source);
+                mol.remainderWallet = std::make_shared<Wallet>(source);
+                mol.initWithdrawBuffer(source, {recipient}, {amount}, source);
+                setFixedTimestamps(mol);
+                mol.sign(secret, false);
+
+                long long sum = 0;
+                for (const auto& a : mol.atoms) if (a.isotope == "V" || a.isotope == "B") sum += std::stoll(a.value);
+                bool shape = mol.atoms.size() == 3
+                    && mol.atoms[0].isotope == "B" && mol.atoms[0].value == tv.at("expectedSourceValue").get<std::string>()
+                    && mol.atoms[1].isotope == "V" && mol.atoms[1].value == tv.at("expectedRecipientValue").get<std::string>()
+                    && mol.atoms[2].isotope == "B" && mol.atoms[2].value == tv.at("expectedRemainderValue").get<std::string>();
+                bool ok = shape && std::to_string(sum) == tv.at("expectedSum").get<std::string>() && Molecule::verify(mol);
+                Logger::test("withdraw " + name + " conserves (B+V sum 0; cross-isotope bypass)", ok);
+                all_pass = all_pass && ok;
+                last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
+            }
 
             results_.buffer_family = {
                 .passed = all_pass,
-                .molecular_hash = deposit.molecularHash,
-                .atom_count = static_cast<int>(deposit.atoms.size() + withdraw.atoms.size()),
-                .validation_error = all_pass ? "null" : "buffer family validation failed"
+                .molecular_hash = last_hash,
+                .atom_count = atom_total,
+                .validation_error = all_pass ? "null" : "buffer family vector validation failed"
             };
 
             return all_pass;
