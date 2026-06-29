@@ -41,7 +41,10 @@ add_test(
 set_tests_properties(SHAKE256Validation PROPERTIES
     LABELS "cryptography;validation;core"
     TIMEOUT 60
-    REQUIRED_FILES test_shake256_validation
+    # The target is `test_shake256_validation` but OUTPUT_NAME renames the binary to
+    # `shake256_validation`; use the target-file genex so REQUIRED_FILES points at the
+    # actual built path (a bare target name was looked up as a literal file → "Not Run").
+    REQUIRED_FILES $<TARGET_FILE:test_shake256_validation>
 )
 
 # PQ-transport (Phase E): live ML-KEM CipherHash round-trip test. Gated at runtime on

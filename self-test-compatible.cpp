@@ -115,7 +115,7 @@ struct NegativeTestResult {
 
 struct TestResults {
     std::string sdk = "C++";
-    std::string version = "0.8.1";
+    std::string version = "0.9.0";
     std::string timestamp;
     CryptoTestResult crypto;
     MoleculeTestResult meta_creation;
