@@ -913,6 +913,14 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
                         pImpl_->authToken = jwt;
                         pImpl_->httpClient->setAuthToken(jwt);
                     }
+                    // PQ-transport Phase E: plumb the validator's advertised ML-KEM pubkey (payload
+                    // "key") + the AUTH source wallet (which decrypts CipherHash responses) into the
+                    // transport, then set the session encryption flag to match the requested mode.
+                    if (payload.contains("key") && payload["key"].is_string()) {
+                        pImpl_->httpClient->setCipherContext(
+                            std::make_shared<Wallet>(source), payload["key"].get<std::string>());
+                    }
+                    pImpl_->httpClient->setEncryption(encrypt);
                 } catch (const std::exception&) {
                     // payload not parseable (e.g. a rejected molecule) -> leave authToken unset
                 }
@@ -924,6 +932,12 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
 
 bool KnishIOClient::isAuthenticated() const noexcept {
     return pImpl_->authToken.has_value() && !pImpl_->authToken->empty();
+}
+
+void KnishIOClient::switchEncryption(bool encrypt) {
+    // PQ-transport Phase E: toggle the encrypted transport on the active session. The cipher
+    // context (AUTH source wallet + validator pubkey) was plumbed during requestAuthToken.
+    pImpl_->httpClient->setEncryption(encrypt);
 }
 
 // Utility methods

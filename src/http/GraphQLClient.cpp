@@ -1,15 +1,73 @@
 #include "http/GraphQLClient.h"
 #include "exception/KnishIOException.h"
 #include "third_party/nlohmann/json.hpp"
+#include "Wallet.h"
 #include <sstream>
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <cstring>
+#include <regex>
+#include <algorithm>
 #include <sodium.h>
 
 namespace knishio {
 namespace http {
+
+namespace {
+
+// PQ-transport (Phase E): the canonical ML-KEM CipherHash transport query (matches the validator
+// + the other SDKs).
+const char* const CIPHER_HASH_QUERY =
+    "query ( $Hash: String! ) { CipherHash ( Hash: $Hash ) { hash } }";
+
+// Light parse of a GraphQL query → (operation_type, root_field_name), for the CipherHash bypass.
+std::pair<std::string, std::string> parseOperation(const std::string& query) {
+    std::string type = "query";
+    std::smatch m;
+    std::regex opRe(R"(\b(query|mutation|subscription)\b)", std::regex::icase);
+    if (std::regex_search(query, m, opRe)) {
+        type = m[1].str();
+        std::transform(type.begin(), type.end(), type.begin(),
+                       [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+    }
+    std::string name;
+    auto brace = query.find('{');
+    if (brace != std::string::npos) {
+        std::string rest = query.substr(brace + 1);
+        std::smatch nm;
+        std::regex idRe(R"([A-Za-z_][A-Za-z0-9_]*)");
+        if (std::regex_search(rest, nm, idRe)) {
+            name = nm[0].str();
+        }
+    }
+    return {type, name};
+}
+
+// Whether an outgoing request should be wrapped in CipherHash. Bypass (plaintext): __schema/
+// ContinuId queries, the AccessToken mutation, and the U-isotope ProposeMolecule (auth bootstrap —
+// the key exchange itself can't be encrypted). Mirrors the validator/other-SDK bypass set.
+bool shouldEncryptRequest(const GraphQLClient::Request& request) {
+    auto op = parseOperation(request.query);
+    const std::string& type = op.first;
+    const std::string& name = op.second;
+    if (type == "query" && (name == "__schema" || name == "ContinuId")) return false;
+    if (type == "mutation" && name == "AccessToken") return false;
+    if (type == "mutation" && name == "ProposeMolecule" && request.variables.has_value()) {
+        const auto& v = request.variables.value();
+        if (v.contains("molecule") && v["molecule"].contains("atoms")
+            && v["molecule"]["atoms"].is_array() && !v["molecule"]["atoms"].empty()) {
+            const auto& a0 = v["molecule"]["atoms"][0];
+            if (a0.contains("isotope") && a0["isotope"].is_string()
+                && a0["isotope"].get<std::string>() == "U") {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+} // anonymous namespace
 
 // Implementation class
 class GraphQLClient::Impl {
@@ -21,6 +79,11 @@ public:
     std::unordered_map<std::string, std::string> customHeaders;
     bool verbose = false;
     bool verifySSL = true;  /* false allows self-signed dev validators */
+
+    // PQ-transport (Phase E): ML-KEM CipherHash encrypted transport state.
+    bool cipherEnabled = false;
+    std::optional<std::string> serverPubKey;        // validator's advertised ML-KEM pubkey (base64)
+    std::shared_ptr<KnishIO::Wallet> cipherWallet;  // the AUTH source wallet that decrypts responses
 
     // Statistics
     mutable std::mutex statsMutex;
@@ -281,8 +344,23 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     // Set URL
     curl_easy_setopt(curl, CURLOPT_URL, pImpl_->uri.c_str());
     
-    // Set POST data
-    std::string postData = request.toJsonString();
+    // Set POST data — PQ-transport Phase E: wrap in the ML-KEM CipherHash envelope when encryption
+    // is enabled and the operation isn't bypassed (the validator decrypts it). Encrypt the FULL
+    // body string (the validator recovers it as a JSON string value → parses the inner request).
+    bool encryptedRequest = false;
+    std::string postData;
+    if (pImpl_->cipherEnabled && pImpl_->cipherWallet && pImpl_->serverPubKey.has_value()
+        && shouldEncryptRequest(request)) {
+        std::string envelope = pImpl_->cipherWallet->encryptStringML768(
+            request.toJsonString(), pImpl_->serverPubKey.value());
+        Request wrapped;
+        wrapped.query = CIPHER_HASH_QUERY;
+        wrapped.variables = nlohmann::json{{"Hash", envelope}};
+        postData = wrapped.toJsonString();
+        encryptedRequest = true;
+    } else {
+        postData = request.toJsonString();
+    }
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, postData.length());
     
@@ -328,7 +406,28 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     response.statusCode = static_cast<int>(httpCode);
     response.body = responseBody;
     response.headers = responseHeaders;
-    
+
+    // PQ-transport Phase E: decrypt the CipherHash response envelope back to the inner GraphQL
+    // response JSON (which replaces the body for normal parsing). The validator encrypts the
+    // response OBJECT, so decryptMyMessageML768 returns the raw inner JSON (no JSON-decode).
+    if (encryptedRequest && pImpl_->cipherWallet) {
+        try {
+            nlohmann::json env = nlohmann::json::parse(response.body);
+            if (env.contains("data") && env["data"].is_object()
+                && env["data"].contains("CipherHash") && env["data"]["CipherHash"].is_object()
+                && env["data"]["CipherHash"].contains("hash")
+                && env["data"]["CipherHash"]["hash"].is_string()) {
+                std::string decrypted = pImpl_->cipherWallet->decryptMyMessageML768(
+                    env["data"]["CipherHash"]["hash"].get<std::string>());
+                if (!decrypted.empty()) {
+                    response.body = decrypted;
+                }
+            }
+        } catch (const std::exception&) {
+            // Not a CipherHash envelope (e.g. a plaintext error response) — leave body unchanged.
+        }
+    }
+
     // Check for GraphQL errors in response
     try {
         nlohmann::json jsonResponse = response.toJson();
@@ -344,6 +443,15 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
 
 void GraphQLClient::setAuthToken(const std::string& token) {
     pImpl_->authToken = token;
+}
+
+void GraphQLClient::setEncryption(bool encrypt) {
+    pImpl_->cipherEnabled = encrypt;
+}
+
+void GraphQLClient::setCipherContext(std::shared_ptr<KnishIO::Wallet> wallet, const std::string& serverPubKey) {
+    pImpl_->cipherWallet = std::move(wallet);
+    pImpl_->serverPubKey = serverPubKey;
 }
 
 void GraphQLClient::clearAuthToken() {

@@ -22,6 +22,15 @@ public:
 	std::map<std::string, std::string> encryptMessageML768(const std::string& message, const std::string& recipient_pubkey);
 	std::string decryptMessageML768(const std::map<std::string, std::string>& encrypted_data);
 
+	// PQ-transport (Phase E): the canonical ML-KEM CipherHash transport helpers.
+	// hashShare = standard base64 of SHAKE256(pubkey, 8 bytes); encryptStringML768 = the stringified
+	// single-recipient request envelope; decryptMyMessageML768 = decrypt the response map addressed
+	// to this wallet → the RAW inner response JSON; mlkemDecryptToString = raw decap+AES (no JSON-decode).
+	std::string hashShare(const std::string& pubkey);
+	std::string encryptStringML768(const std::string& message, const std::string& recipient_pubkey);
+	std::string decryptMyMessageML768(const std::string& mapJson);
+	std::string mlkemDecryptToString(const std::map<std::string, std::string>& encrypted_data);
+
 private:
 	// AES-256-GCM helper methods for ML-KEM768 message encryption
 	std::vector<uint8_t> encryptWithSharedSecret(const std::vector<uint8_t>& message, const std::vector<uint8_t>& shared_secret);

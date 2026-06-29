@@ -44,6 +44,27 @@ set_tests_properties(SHAKE256Validation PROPERTIES
     REQUIRED_FILES test_shake256_validation
 )
 
+# PQ-transport (Phase E): live ML-KEM CipherHash round-trip test. Gated at runtime on
+# CIPHERHASH_TEST_URL (skips cleanly → CI-safe even without a reachable validator).
+add_executable(cipherhash_live_test cipherhash_live_test.cpp)
+target_link_libraries(cipherhash_live_test
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(cipherhash_live_test PRIVATE cxx_std_20)
+set_target_properties(cipherhash_live_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME CipherHashLive
+    COMMAND cipherhash_live_test
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(CipherHashLive PROPERTIES
+    LABELS "integration;network;pq-transport"
+    TIMEOUT 60
+)
+
 # Unit tests (if we add them later)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/unit_tests.cpp")
     add_executable(unit_tests unit_tests.cpp)

@@ -380,24 +380,29 @@ std::map<std::string, std::string> Wallet::encryptMessageML768(const std::string
 #endif
 }
 
-std::string Wallet::decryptMessageML768(const std::map<std::string, std::string>& encrypted_data) {
+// ML-KEM768 decapsulate + AES-256-GCM decrypt → the RAW decrypted UTF-8 string (no JSON-decode).
+// Shared by decryptMessageML768 (which JSON-decodes the result — the c136 vector + the PQ-transport
+// REQUEST direction encrypt a JSON string value) and decryptMyMessageML768 (the PQ-transport
+// RESPONSE direction, where the validator encrypts the response OBJECT → the raw plaintext is the
+// inner GraphQL response JSON directly). PQ-transport Phase E.
+std::string Wallet::mlkemDecryptToString(const std::map<std::string, std::string>& encrypted_data) {
 #ifdef HAVE_MLKEM_NATIVE
     auto ciphertext = fromBase64(encrypted_data.at("cipherText"));
     auto encrypted_message = fromBase64(encrypted_data.at("encryptedMessage"));
-    
+
     if (ciphertext.size() != 1088) {  // MLKEM768_CIPHERTEXTBYTES
         throw std::invalid_argument("Invalid ML-KEM768 ciphertext size");
     }
-    
+
     // Decapsulate to recover shared secret
     std::vector<uint8_t> shared_secret(32);  // MLKEM768_SHAREDSECRETBYTES
-    
+
     int result = crypto_kem_dec(
         shared_secret.data(),
         ciphertext.data(),
         mlkem_private_key.data()
     );
-    
+
     if (result != 0) {
         sodium_memzero(shared_secret.data(), shared_secret.size());
         throw std::runtime_error("ML-KEM768 decapsulation failed");
@@ -413,28 +418,61 @@ std::string Wallet::decryptMessageML768(const std::map<std::string, std::string>
         throw;
     }
 
-    // Convert decrypted bytes to JSON string
+    // Convert decrypted bytes to the raw plaintext string
     std::string plaintext_json(plaintext_bytes.begin(), plaintext_bytes.end());
-
-    // JSON-decode the decrypted message (cross-SDK compatibility requirement)
-    // Other SDKs (PHP, JavaScript, Kotlin) JSON-encode before encryption
-    std::string plaintext;
-    try {
-        json parsed = json::parse(plaintext_json);
-        plaintext = parsed.get<std::string>();
-    } catch (const std::exception& e) {
-        // If JSON parsing fails, return raw plaintext (backward compatibility)
-        plaintext = plaintext_json;
-    }
 
     // Clear shared secret and sensitive data
     sodium_memzero(shared_secret.data(), shared_secret.size());
     sodium_memzero(plaintext_bytes.data(), plaintext_bytes.size());
 
-    return plaintext;
+    return plaintext_json;
 #else
     throw std::runtime_error("ML-KEM768 not available");
 #endif
+}
+
+std::string Wallet::decryptMessageML768(const std::map<std::string, std::string>& encrypted_data) {
+    // JSON-decode the raw decrypted plaintext (cross-SDK compatibility: the c136 vector + the
+    // request direction encrypt a JSON *string* value). The PQ-transport RESPONSE path is an
+    // OBJECT and uses the raw helper directly (decryptMyMessageML768).
+    std::string plaintext_json = mlkemDecryptToString(encrypted_data);
+    try {
+        json parsed = json::parse(plaintext_json);
+        return parsed.get<std::string>();
+    } catch (const std::exception& e) {
+        // If JSON parsing fails / isn't a string, return raw plaintext (backward compatibility)
+        return plaintext_json;
+    }
+}
+
+// Canonical cross-SDK hashShare for a public key: standard base64 of SHAKE256(pubkey_utf8, 8 bytes)
+// — byte-matches the validator's hash_share and the JS/Kotlin/PHP/TS/Python hashShare. NOTE
+// shake256() takes a BIT length, so 64 bits = 8 bytes. PQ-transport Phase E.
+std::string Wallet::hashShare(const std::string& pubkeyStr) {
+    return toBase64(shake256(pubkeyStr, 64));
+}
+
+// Post-quantum (ML-KEM768) CipherHash request envelope: a stringified single-recipient map
+// { "<hashShare(recipient_pubkey)>": {cipherText, encryptedMessage} }. Matches the Rust validator's
+// CipherHash handler. PQ-transport Phase E.
+std::string Wallet::encryptStringML768(const std::string& message, const std::string& recipient_pubkey) {
+    auto envelope = encryptMessageML768(message, recipient_pubkey);
+    json map;
+    map[hashShare(recipient_pubkey)] = envelope;  // map<string,string> → JSON object
+    return map.dump();
+}
+
+// Decrypt a CipherHash response map (stringified) addressed to THIS wallet's ML-KEM pubkey
+// (hashShare(base64(mlkem_public_key))) → the RAW inner GraphQL response JSON (NOT json-decoded;
+// it replaces the HTTP response body). Empty string if no entry. PQ-transport Phase E.
+std::string Wallet::decryptMyMessageML768(const std::string& mapJson) {
+    json map = json::parse(mapJson);
+    std::string shareKey = hashShare(toBase64(mlkem_public_key));
+    if (!map.contains(shareKey)) {
+        return std::string();
+    }
+    auto envelope = map.at(shareKey).get<std::map<std::string, std::string>>();
+    return mlkemDecryptToString(envelope);
 }
 
 // Partition this wallet's tokenUnits across the SENT set (id in `units`) and the KEPT set,

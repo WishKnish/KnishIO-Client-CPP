@@ -328,6 +328,13 @@ public:
     requestAuthToken(const std::optional<std::string>& secret = std::nullopt,
                      const std::optional<std::string>& cellSlug = std::nullopt,
                      bool encrypt = false);
+
+    /**
+     * PQ-transport (Phase E): toggle the ML-KEM CipherHash encrypted transport on the active
+     * session (the cipher context — wallet + validator pubkey — was plumbed at auth).
+     * @param encrypt True to encrypt subsequent requests.
+     */
+    void switchEncryption(bool encrypt);
     
     /**
      * Check if authenticated

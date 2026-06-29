@@ -9,6 +9,9 @@
 #include <curl/curl.h>
 #include "third_party/nlohmann/json.hpp"
 
+// PQ-transport (Phase E): the AUTH source wallet that en/decrypts the ML-KEM CipherHash envelope.
+namespace KnishIO { class Wallet; }
+
 namespace knishio {
 namespace http {
 
@@ -120,6 +123,18 @@ public:
      * Clear authorization token
      */
     void clearAuthToken();
+
+    /**
+     * PQ-transport (Phase E): toggle the ML-KEM CipherHash encrypted transport.
+     * @param encrypt True to wrap requests in CipherHash + decrypt responses.
+     */
+    void setEncryption(bool encrypt);
+
+    /**
+     * PQ-transport (Phase E): supply the decrypting wallet (the AUTH source wallet) + the
+     * validator's advertised ML-KEM public key (base64). Set once at auth.
+     */
+    void setCipherContext(std::shared_ptr<KnishIO::Wallet> wallet, const std::string& serverPubKey);
     
     /**
      * Set custom header

@@ -459,6 +459,10 @@ std::vector<Atom> Molecule::initAuthorization(const Wallet &sourceWallet, bool e
 	uMeta.push_back({"encrypt", encrypt ? "true" : "false"});
 	if (!sourceWallet.mlkem_public_key.empty()) {
 		uMeta.push_back({"pubkey", toBase64(sourceWallet.mlkem_public_key)});
+		// PQ-transport Phase E: convey the AUTH source wallet's ML-KEM768 public key as a SIGNED
+		// walletPubkey meta (this U-atom is signed → MITM-proof), so the validator's
+		// extract_enc_pubkey can encrypt CipherHash responses back to THIS wallet.
+		uMeta.push_back({"walletPubkey", toBase64(sourceWallet.mlkem_public_key)});
 	}
 	uMeta.push_back({"characters", "BASE64"});
 
