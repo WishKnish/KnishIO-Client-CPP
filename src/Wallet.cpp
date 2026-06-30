@@ -339,7 +339,14 @@ std::map<std::string, std::string> Wallet::encryptMessageML768(const std::string
     // Decode recipient public key from Base64
     auto recipient_key_bytes = fromBase64(recipient_pubkey);
     if (recipient_key_bytes.size() != 1184) {  // MLKEM768_PUBLICKEYBYTES
-        throw std::invalid_argument("Invalid ML-KEM768 public key size");
+        // A wrong-length key here almost always means the node did not advertise an ML-KEM public key
+        // in its auth `key` field (e.g. a validator predating the PQ-transport build) — give an
+        // actionable message, consistent with the other SDKs' encrypt guards.
+        throw std::invalid_argument(
+            "KnishIO: cannot ML-KEM-encrypt — recipient public key is " +
+            std::to_string(recipient_key_bytes.size()) +
+            " bytes, expected 1184 (ML-KEM-768). The node likely did not advertise an ML-KEM public key "
+            "(upgrade the validator to a PQ-transport build), or authenticate with encrypt=false.");
     }
     
     // Encapsulate to generate shared secret and ciphertext
