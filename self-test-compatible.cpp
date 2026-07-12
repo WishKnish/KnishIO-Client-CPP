@@ -370,6 +370,15 @@ public:
                         if (existing_molecules.contains("complexTransfer") && existing_molecules["complexTransfer"].is_string()) {
                             results_.molecules_complex_transfer = existing_molecules["complexTransfer"].get<std::string>();
                         }
+                        if (existing_molecules.contains("tokenCreation") && existing_molecules["tokenCreation"].is_string()) {
+                            results_.molecules_token_creation = existing_molecules["tokenCreation"].get<std::string>();
+                        }
+                        if (existing_molecules.contains("walletCreation") && existing_molecules["walletCreation"].is_string()) {
+                            results_.molecules_wallet_creation = existing_molecules["walletCreation"].get<std::string>();
+                        }
+                        if (existing_molecules.contains("shadowWalletClaim") && existing_molecules["shadowWalletClaim"].is_string()) {
+                            results_.molecules_shadow_wallet_claim = existing_molecules["shadowWalletClaim"].get<std::string>();
+                        }
                         if (existing_molecules.contains("mlkem768") && existing_molecules["mlkem768"].is_string()) {
                             results_.molecules_mlkem768 = existing_molecules["mlkem768"].get<std::string>();
                         }
@@ -413,6 +422,30 @@ public:
                             if (complex.contains("molecularHash")) results_.complex_transfer.molecular_hash = complex["molecularHash"].get<std::string>();
                             if (complex.contains("atomCount")) results_.complex_transfer.atom_count = complex["atomCount"].get<int>();
                             if (complex.contains("hasRemainder")) results_.complex_transfer.has_remainder = complex["hasRemainder"].get<bool>();
+                        }
+
+                        // Preserve token creation test results
+                        if (existing_tests.contains("tokenCreation")) {
+                            auto& token = existing_tests["tokenCreation"];
+                            if (token.contains("passed")) results_.token_creation.passed = token["passed"].get<bool>();
+                            if (token.contains("molecularHash")) results_.token_creation.molecular_hash = token["molecularHash"].get<std::string>();
+                            if (token.contains("atomCount")) results_.token_creation.atom_count = token["atomCount"].get<int>();
+                        }
+
+                        // Preserve wallet creation test results
+                        if (existing_tests.contains("walletCreation")) {
+                            auto& wallet = existing_tests["walletCreation"];
+                            if (wallet.contains("passed")) results_.wallet_creation.passed = wallet["passed"].get<bool>();
+                            if (wallet.contains("molecularHash")) results_.wallet_creation.molecular_hash = wallet["molecularHash"].get<std::string>();
+                            if (wallet.contains("atomCount")) results_.wallet_creation.atom_count = wallet["atomCount"].get<int>();
+                        }
+
+                        // Preserve shadow wallet claim test results
+                        if (existing_tests.contains("shadowWalletClaim")) {
+                            auto& shadow = existing_tests["shadowWalletClaim"];
+                            if (shadow.contains("passed")) results_.shadow_wallet_claim.passed = shadow["passed"].get<bool>();
+                            if (shadow.contains("molecularHash")) results_.shadow_wallet_claim.molecular_hash = shadow["molecularHash"].get<std::string>();
+                            if (shadow.contains("atomCount")) results_.shadow_wallet_claim.atom_count = shadow["atomCount"].get<int>();
                         }
 
                         // Preserve ML-KEM768 test results

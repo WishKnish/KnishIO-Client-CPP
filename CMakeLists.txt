@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # Project definition
 project(KnishIOClientCPP
-    VERSION 0.9.1
+    VERSION 0.9.2
     DESCRIPTION "KnishIO DLT Client SDK for C++"
     HOMEPAGE_URL "https://github.com/knishio"
     LANGUAGES CXX C  # Enable C for mlkem-native integration

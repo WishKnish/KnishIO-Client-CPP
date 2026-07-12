@@ -17,6 +17,7 @@ Ensure you have the following dependencies installed:
 
 - **C++20 compatible compiler** (GCC 10+, Clang 12+, or MSVC 2019+)
 - **CMake** 3.20 or higher
+- **OpenSSL** 3.0+ for AES-256-GCM (EVP) used by the ML-KEM768 transport
 - **libsodium** 1.0.18+ for cryptographic operations
 - **libcurl** 7.0+ for HTTP/GraphQL communication
 - **POSIX threads** for concurrent operations
@@ -37,6 +38,22 @@ sudo apt-get install cmake libsodium-dev libcurl4-openssl-dev build-essential
 - Install Visual Studio 2019 or later
 - Install vcpkg for dependency management
 - Install dependencies: `vcpkg install libsodium curl`
+
+### System dependencies
+
+These libraries are resolved from the **host system** (via `pkg-config` / `find_package`) and are **not** vendored or version-pinned by the build. Because they live outside this repo, their security posture is the responsibility of the host: keep them patched with your platform package manager (`brew upgrade`, `apt upgrade`, etc.).
+
+| Library   | Role                                              | Minimum | Verified on build host |
+|-----------|---------------------------------------------------|---------|------------------------|
+| OpenSSL   | AES-256-GCM (EVP) for the ML-KEM768 transport     | 3.0     | 3.6.3                  |
+| libcurl   | HTTP / GraphQL transport                          | 7.0     | 8.7.1                  |
+| libsodium | SHAKE256 and general cryptographic primitives     | 1.0.18  | 1.0.22                 |
+
+"Verified on build host" is the version this SDK was last built and self-tested against; it is not a ceiling. Newer patch/minor releases are expected to work and should be preferred for security updates.
+
+### Vendored crypto pin
+
+The ML-KEM768 (FIPS 203) implementation is vendored as a git submodule at `external/mlkem-native`, pinned to **v1.2.0 (`0ba906cb`)** from [pq-code-package/mlkem-native](https://github.com/pq-code-package/mlkem-native). The pin is deliberate so local builds produce byte-identical ML-KEM keys to what CI ships and to the other KnishIO SDKs (cross-SDK crypto parity is asserted by the self-test's ML-KEM768 keygen vector). The single-header `nlohmann/json` (`src/third_party/nlohmann/json.hpp`, v3.11.3) is likewise vendored. Do not bump either ad hoc — a `git status` showing `M external/mlkem-native` means the submodule has drifted from the pin (`git submodule update --init external/mlkem-native` restores it). Bump the crypto pin only for an upstream security fix, and only after the full self-test still passes byte-identically.
 
 ### Build Instructions
 
