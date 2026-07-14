@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <cstdlib>
 #include <filesystem>
+#include <sodium.h>
 
 // KnishIO SDK includes
 #include "src/KnishIOClient.h"
@@ -508,6 +509,7 @@ public:
         bool buffer_result = testBufferFamily();
         bool mlkem_result = testMLKEM768();
         bool mlkem_vector_result = testMLKEM768VectorAssertion();
+        bool nacl_vector_result = testNaClVectorAssertion();
         bool negative_result = testNegativeCases();
         bool cross_sdk_result = testCrossSdkValidation();
 
@@ -521,12 +523,13 @@ public:
         displaySummary();
 
         // Return success if all tests passed
-        int total_tests = 11;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + ML-KEM768 vector + negative
+        int total_tests = 12;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + ML-KEM768 vector + NaCl vector + negative
         int passed_tests = (crypto_result ? 1 : 0) + (meta_result ? 1 : 0) +
                           (simple_result ? 1 : 0) + (complex_result ? 1 : 0) +
                           (token_result ? 1 : 0) + (wallet_result ? 1 : 0) + (shadow_result ? 1 : 0) +
                           (buffer_result ? 1 : 0) +
-                          (mlkem_result ? 1 : 0) + (mlkem_vector_result ? 1 : 0) + (negative_result ? 1 : 0);
+                          (mlkem_result ? 1 : 0) + (mlkem_vector_result ? 1 : 0) +
+                          (nacl_vector_result ? 1 : 0) + (negative_result ? 1 : 0);
 
         return (passed_tests == total_tests);
     }
@@ -1264,6 +1267,80 @@ private:
             bool decrypt_ok = (plaintext == dec.at("expectedPlaintext").get<std::string>());
             Logger::test("ML-KEM768 frozen sample decrypts to vector plaintext", decrypt_ok);
             return keygen_ok && decrypt_ok;
+        } catch (const std::exception& e) {
+            std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
+            return false;
+        }
+    }
+
+    // Classical NaCl (X25519 scalarmult_base + crypto_box/secretbox + sealed-box),
+    // byte-frozen against the reference tweetnacl. System libsodium must reproduce
+    // these byte-for-byte, proving classical cross-SDK parity.
+    bool testNaClVectorAssertion() {
+        Logger::message("\n5c. Classical NaCl Cross-SDK Vector Assertion", colors::BLUE);
+        try {
+            std::vector<std::string> candidates;
+            if (const char* env = std::getenv("KNISHIO_CROSS_PLATFORM_VECTORS")) candidates.emplace_back(env);
+            candidates.emplace_back("tests/fixtures/cross-platform-test-vectors.json");
+            if (const char* sd = std::getenv("KNISHIO_SHARED_RESULTS")) candidates.emplace_back(std::string(sd) + "/cross-platform-test-vectors.json");
+
+            std::ifstream f;
+            for (const auto& p : candidates) { f.open(p); if (f.is_open()) break; f.clear(); }
+            if (!f.is_open()) {
+                Logger::message("  SKIPPED: cross-platform vector file absent (standalone CI)", colors::YELLOW);
+                return true; // skip, not fail
+            }
+            json vectors = json::parse(f);
+            const auto& root = vectors.at("vectors");
+            if (!root.contains("nacl")) {
+                Logger::message("  SKIPPED: nacl section absent", colors::YELLOW);
+                return true;
+            }
+            const auto& nacl = root.at("nacl");
+            if (sodium_init() < 0) { std::cout << "  sodium_init failed\n"; return false; }
+
+            bool all_ok = true;
+
+            // (a) X25519 scalarmult_base: 32-byte secret → 32-byte public.
+            for (const auto& c : nacl.at("scalarMultBase")) {
+                auto sk = fromHexString(c.at("secretKeyHex").get<std::string>());
+                std::vector<uint8_t> pk(crypto_scalarmult_BYTES);
+                crypto_scalarmult_base(pk.data(), sk.data());
+                bool ok = (toBase64(pk) == c.at("expectedPublicKey").get<std::string>());
+                Logger::test("NaCl X25519 scalarmult_base matches vector", ok);
+                all_ok = all_ok && ok;
+            }
+
+            // (b) crypto_box with a fixed nonce → [MAC(16)‖ct], deterministic.
+            {
+                const auto& cb = nacl.at("cryptoBox");
+                auto senderSk = fromHexString(cb.at("senderSecretKeyHex").get<std::string>());
+                auto recipientPk = fromBase64(cb.at("recipientPublicKey").get<std::string>());
+                auto nonce = fromBase64(cb.at("nonce").get<std::string>());
+                std::string pt = cb.at("plaintext").get<std::string>();
+                std::vector<uint8_t> msg(pt.begin(), pt.end());
+                std::vector<uint8_t> boxed(msg.size() + crypto_box_MACBYTES);
+                crypto_box_easy(boxed.data(), msg.data(), msg.size(), nonce.data(), recipientPk.data(), senderSk.data());
+                bool ok = (toBase64(boxed) == cb.at("expectedBox").get<std::string>());
+                Logger::test("NaCl crypto_box ciphertext matches vector", ok);
+                all_ok = all_ok && ok;
+            }
+
+            // (c) sealed-box: decrypt a frozen blob (encrypt is non-deterministic).
+            {
+                const auto& sb = nacl.at("sealedBox");
+                auto sealed = fromBase64(sb.at("sealed").get<std::string>());
+                auto recipientPk = fromBase64(sb.at("recipientPublicKey").get<std::string>());
+                auto recipientSk = fromHexString(sb.at("recipientSecretKeyHex").get<std::string>());
+                std::vector<uint8_t> out(sealed.size() - crypto_box_SEALBYTES);
+                int rc = crypto_box_seal_open(out.data(), sealed.data(), sealed.size(), recipientPk.data(), recipientSk.data());
+                std::string got(out.begin(), out.end());
+                bool ok = (rc == 0 && got == sb.at("expectedPlaintext").get<std::string>());
+                Logger::test("NaCl sealed-box frozen blob decrypts to vector plaintext", ok);
+                all_ok = all_ok && ok;
+            }
+
+            return all_ok;
         } catch (const std::exception& e) {
             std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
             return false;
