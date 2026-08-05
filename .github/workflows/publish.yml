@@ -1,0 +1,208 @@
+# C++ SDK publish — tag-driven GitHub Releases (cycle 182). Push a bare semver tag (e.g.
+# `0.9.2`, no `v` prefix -- matches this repo's existing tag history: 0.1.37, 0.8.0, 0.9.0,
+# 0.9.2) -> version-consistency gate -> build/self-test/lint gate (mirrors ci.yml) -> package
+# prebuilt binaries -> GitHub Release.
+#
+# Distribution channel: GitHub Releases only. Unlike the other 6 SDKs (npm x2, Packagist,
+# Maven Central, crates.io, PyPI), the C++ SDK has no matching package registry for this
+# dependency set (libsodium/curl/openssl) -- a tagged GitHub Release with prebuilt tarballs
+# *is* the publish target. Packaging mirrors the validator's proven pattern (servers/
+# knishio-validator-rust/Makefile `package` targets): `cmake --install` to a staging tree
+# (headers + shared/static libs + CMake package config, via the install() rules already in
+# CMakeLists.txt), tarred per platform, with a SHAKE256SUMS manifest (FIPS 202 -- this
+# project's default hash over SHA-2) computed over every shipped file. CPack is already
+# wired in CMakeLists.txt (TGZ/DEB/RPM on Linux, ZIP/DragNDrop on macOS) but is intentionally
+# NOT used here: it's only configured for this SDK (not the C SDK, which has no CPack at
+# all), and its DEB/RPM generators need host tooling (dpkg-deb/rpmbuild) not uniformly
+# present -- the plain install()+tar+SHAKE256SUMS path keeps both SDKs' release pipelines
+# symmetric and is exactly what's already proven in this repo.
+#
+# No OIDC/trusted-publishing here -- there is no registry to authenticate to, so auth is just
+# GITHUB_TOKEN with `contents: write` to create the Release. Deliberately no top-level
+# `environment:` key (unlike the JS/Rust publish.yml, which target an OIDC trusted-publisher
+# environment): a GitHub deployment environment configured "protected branches only" REJECTS
+# tag-triggered deploys, and there is no registry-side trusted-publisher config here that would
+# need one. If an environment is added later for its own sake, it must explicitly allow tag refs.
+#
+# Source distribution: GitHub already auto-attaches a source zip/tarball to every Release, so
+# this workflow does not build a custom source archive. That auto-generated archive (like any
+# plain `git archive` of a tag) does NOT include the external/mlkem-native submodule (~150MB of
+# pinned upstream history) -- building from it still requires `git submodule update --init`,
+# exactly as the README already documents via `git clone --recursive`. Nothing changes there.
+name: Publish
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+
+permissions:
+  contents: write   # create the GitHub Release; no registry auth needed
+
+jobs:
+  version-gate:
+    name: verify tag matches declared SDK version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Two independent places declare "what version is this SDK": CMakeLists.txt's
+      # project(... VERSION ...) and the hardcoded SDK_VERSION literal in
+      # src/KnishIOClient.cpp. A release must never be able to ship a version it doesn't
+      # itself claim -- a test run once reported v0.9.1 from a binary built before the
+      # 0.9.2 bump, and an external audit concluded from it (incorrectly, but only because
+      # nothing caught the drift first) that this SDK had no version manifest at all. Fail
+      # here, before anything is built.
+      - name: Verify tag == CMakeLists.txt VERSION == KnishIOClient.cpp SDK_VERSION
+        id: check
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          CMAKE_VERSION=$(grep -A5 'project(' CMakeLists.txt | grep -oE 'VERSION[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+          SDK_VERSION_LITERAL=$(grep -oE 'SDK_VERSION[[:space:]]*=[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' src/KnishIOClient.cpp | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+          echo "tag=$TAG  CMakeLists.txt=$CMAKE_VERSION  KnishIOClient.cpp=$SDK_VERSION_LITERAL"
+
+          mismatches=()
+          [[ "$TAG" == "$CMAKE_VERSION" ]]         || mismatches+=("tag '$TAG' != CMakeLists.txt VERSION '$CMAKE_VERSION'")
+          [[ "$TAG" == "$SDK_VERSION_LITERAL" ]]   || mismatches+=("tag '$TAG' != KnishIOClient.cpp SDK_VERSION '$SDK_VERSION_LITERAL'")
+
+          if [[ ${#mismatches[@]} -gt 0 ]]; then
+            echo "::error::version mismatch -- refusing to release"
+            printf '::error::%s\n' "${mismatches[@]}"
+            exit 1
+          fi
+
+          echo "OK: tag, CMakeLists.txt, and KnishIOClient.cpp all agree on $TAG"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: build + self-test + lint + package (${{ matrix.platform }})
+    needs: version-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: macos-latest
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # fetch external/mlkem-native (vendored ML-KEM768)
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libsodium-dev libcurl4-openssl-dev \
+            lsb-release wget software-properties-common gnupg
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake pkg-config libsodium openssl@3
+
+      # LLVM 22 + clang-tidy on Linux only, matching ci.yml (no macOS lint job exists there
+      # either) -- the .clang-tidy bugprone-*/performance-* set was tuned against LLVM 22.1.4.
+      - name: Install LLVM 22 (clang + clang-tidy, Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install -y clang-tidy-22
+
+      # KNISHIO_NATIVE_ARCH=OFF is load-bearing for a distributed artifact. The default
+      # Release flags include -march=native -mtune=native, which target the BUILD host's
+      # microarchitecture — a binary compiled on a GitHub runner would emit instructions
+      # a user's older CPU may not implement, and SIGILL on first use. That would defeat
+      # the entire point of shipping prebuilt binaries. Local and benchmark builds keep
+      # the default (ON) and are unaffected.
+      - name: Configure (Linux, clang-22)
+        if: runner.os == 'Linux'
+        run: |
+          CC=clang-22 CXX=clang++-22 cmake -S . -B build \
+            -DKNISHIO_NATIVE_ARCH=OFF \
+            -DKNISHIO_BUILD_TESTS=ON \
+            -DKNISHIO_BUILD_EXAMPLES=OFF \
+            -DCLANG_TIDY_EXE="$(command -v clang-tidy-22)"
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S . -B build \
+            -DKNISHIO_NATIVE_ARCH=OFF \
+            -DKNISHIO_BUILD_TESTS=ON \
+            -DKNISHIO_BUILD_EXAMPLES=OFF
+
+      - name: Build
+        run: cmake --build build -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )"
+
+      # Gate -- never release a tag that doesn't build/self-test/lint clean. Same build ci.yml
+      # already proves; this job just extends it with install + package once it's green.
+      - name: Self-test (frozen molecular hashes + ML-KEM768)
+        run: |
+          mkdir -p shared-test-results
+          KNISHIO_DISABLE_CROSS_VALIDATION=true \
+          KNISHIO_SHARED_RESULTS="$PWD/shared-test-results" \
+            ./build/cpp_self_test
+
+      - name: clang-tidy (lint gate, Linux only)
+        if: runner.os == 'Linux'
+        run: cmake --build build --target lint
+
+      - name: Install to staging tree
+        run: |
+          set -euo pipefail
+          STAGE_NAME="knishio-client-cpp-${{ needs.version-gate.outputs.version }}-${{ matrix.platform }}"
+          echo "STAGE_NAME=$STAGE_NAME" >> "$GITHUB_ENV"
+          cmake --install build --prefix "dist/$STAGE_NAME"
+          cp LICENSE README.md "dist/$STAGE_NAME/"
+
+      - name: Compute SHAKE256SUMS (FIPS 202, matches the validator Makefile pattern)
+        run: |
+          cd "dist/$STAGE_NAME"
+          python3 <<'PY'
+          import hashlib, os
+          lines = []
+          for root, _dirs, files in os.walk('.'):
+              for f in sorted(files):
+                  if f == 'SHAKE256SUMS':
+                      continue
+                  p = os.path.join(root, f)
+                  rel = os.path.relpath(p, '.')
+                  h = hashlib.shake_256(open(p, 'rb').read()).hexdigest(32)
+                  lines.append(f'{h}  {rel}')
+          lines.sort(key=lambda l: l.split('  ', 1)[1])
+          open('SHAKE256SUMS', 'w').write('\n'.join(lines) + '\n')
+          PY
+
+      - name: Create tarball
+        run: tar czf "dist/${STAGE_NAME}.tar.gz" -C dist "$STAGE_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: create GitHub Release
+    needs: [version-gate, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.tar.gz

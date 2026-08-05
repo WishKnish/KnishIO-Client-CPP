@@ -18,6 +18,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <array>
 #include <map>
 #include <memory>
 #include <chrono>
@@ -93,6 +94,11 @@ struct CryptoTestResult {
 
 struct MoleculeTestResult {
     bool passed = false;
+    // A test that could not run (e.g. absent fixture) is neither a pass nor a
+    // failure. Left implicit, a skip reads as `passed == false` to the summary
+    // while the caller's `return true` reads as a pass to the exit-code gate —
+    // the two disagree silently and the test vanishes from the results JSON.
+    bool skipped = false;
     std::string molecular_hash;
     int atom_count = 0;
     bool has_remainder = false;
@@ -116,7 +122,9 @@ struct NegativeTestResult {
 
 struct TestResults {
     std::string sdk = "C++";
-    std::string version = "0.9.2";
+    // Keep in step with project(VERSION) in CMakeLists.txt — the gauntlet's snapshot
+    // coherence gate fails an SDK whose reported version disagrees with its manifest.
+    std::string version = "0.9.3";
     std::string timestamp;
     CryptoTestResult crypto;
     MoleculeTestResult meta_creation;
@@ -135,8 +143,22 @@ struct TestResults {
     std::string molecules_wallet_creation;
     std::string molecules_shadow_wallet_claim;
     std::string molecules_mlkem768;
-    bool cross_sdk_compatible = true;
+    // Starts false. This was `true`, making "fully cross-SDK compatible" the default state
+    // before a single peer molecule had been examined — so every early return out of
+    // testCrossSdkValidation published a pass. A verdict must be earned; the safe default
+    // for a check that has not run is "failed".
+    bool cross_sdk_compatible = false;
+    // Coverage behind the verdict. cross_sdk_compatible alone cannot distinguish
+    // "validated seven peers, all passed" from "validated nothing and so found no
+    // failures" — both used to serialise as true.
+    bool cross_validation_ran = false;
+    int cross_targets_expected = 0;
+    int cross_targets_validated = 0;
 };
+
+/* Number of peer SDKs this SDK is expected to cross-validate against. Mirrors ALL_SDKS in
+ * sdks/run-all-tests.sh minus this SDK itself. */
+static constexpr int kExpectedPeerCount = 7;
 
 /* Logger with modern C++20 features */
 class Logger {
@@ -384,6 +406,32 @@ public:
                             results_.molecules_mlkem768 = existing_molecules["mlkem768"].get<std::string>();
                         }
                         Logger::message("✅ Preserved Round 1 molecules for cross-validation", colors::GREEN);
+
+                        // Guard against this itemized list silently drifting out of date.
+                        //
+                        // In Round-2-only mode these assignments are the ONLY source of the
+                        // molecules this SDK republishes, so a type missing from the list
+                        // above is republished empty and destroys Round 1's work. Kotlin's
+                        // equivalent block named four of seven types on 2026-07-27 and wiped
+                        // tokenCreation, walletCreation and shadowWalletClaim; every peer
+                        // still reported it fully compatible, because peers iterate the
+                        // molecule keys that are present. Fail loudly here instead.
+                        const std::array<std::pair<const char*, const std::string*>, 7> preserved = {{
+                            {"metadata", &results_.molecules_metadata},
+                            {"simpleTransfer", &results_.molecules_simple_transfer},
+                            {"complexTransfer", &results_.molecules_complex_transfer},
+                            {"tokenCreation", &results_.molecules_token_creation},
+                            {"walletCreation", &results_.molecules_wallet_creation},
+                            {"shadowWalletClaim", &results_.molecules_shadow_wallet_claim},
+                            {"mlkem768", &results_.molecules_mlkem768}
+                        }};
+                        for (const auto& [key, field] : preserved) {
+                            if (existing_molecules.contains(key) && !field->empty()) continue;
+                            if (!existing_molecules.contains(key)) continue;  // absent upstream, not our drop
+                            Logger::message(std::string("⚠️  Round 1 published '") + key +
+                                            "' but it was not preserved into Round 2 — "
+                                            "add it to the preserve block above", colors::RED);
+                        }
                     }
 
                     // CRITICAL FIX: Preserve Round 1 test results
@@ -449,6 +497,16 @@ public:
                             if (shadow.contains("atomCount")) results_.shadow_wallet_claim.atom_count = shadow["atomCount"].get<int>();
                         }
 
+                        // Preserve buffer family test results
+                        if (existing_tests.contains("bufferFamily")) {
+                            auto& buffer = existing_tests["bufferFamily"];
+                            if (buffer.contains("passed")) results_.buffer_family.passed = buffer["passed"].get<bool>();
+                            if (buffer.contains("skipped")) results_.buffer_family.skipped = buffer["skipped"].get<bool>();
+                            if (buffer.contains("molecularHash")) results_.buffer_family.molecular_hash = buffer["molecularHash"].get<std::string>();
+                            if (buffer.contains("atomCount")) results_.buffer_family.atom_count = buffer["atomCount"].get<int>();
+                            if (buffer.contains("validationError")) results_.buffer_family.validation_error = buffer["validationError"].get<std::string>();
+                        }
+
                         // Preserve ML-KEM768 test results
                         if (existing_tests.contains("mlkem768")) {
                             auto& mlkem = existing_tests["mlkem768"];
@@ -457,6 +515,14 @@ public:
                             if (mlkem.contains("encryptionSuccess")) results_.mlkem768.encryption_success = mlkem["encryptionSuccess"].get<bool>();
                             if (mlkem.contains("decryptionSuccess")) results_.mlkem768.decryption_success = mlkem["decryptionSuccess"].get<bool>();
                             if (mlkem.contains("plaintextLength")) results_.mlkem768.plaintext_length = mlkem["plaintextLength"].get<int>();
+                        }
+
+                        // Preserve negative-case test results
+                        if (existing_tests.contains("negativeCases")) {
+                            auto& negative = existing_tests["negativeCases"];
+                            if (negative.contains("passed")) results_.negative_cases.passed = negative["passed"].get<bool>();
+                            if (negative.contains("description")) results_.negative_cases.description = negative["description"].get<std::string>();
+                            if (negative.contains("testCount")) results_.negative_cases.testCount = negative["testCount"].get<int>();
                         }
 
                         Logger::message("✅ Preserved Round 1 test results", colors::GREEN);
@@ -670,6 +736,86 @@ private:
         }
     }
 
+    // Build a VALID buffer molecule (deposit or withdraw) via the SDK's own
+    // initDepositBuffer/initWithdrawBuffer builders, apply a single `tamper`
+    // mutation from a buffer_conservation_negative vector, re-sign, and report
+    // whether verification rejected it.
+    //
+    // Mirrors the vector's `recipe` exactly: hand-assembling atoms gets refused
+    // by unrelated checks (atom index, self-transfer) before conservation is
+    // ever evaluated, so only builder + tamper + re-sign actually exercises
+    // whatever B/F conservation logic Molecule::verify() implements. Returns
+    // {rejected, reason} — callers must confirm the reason implicates
+    // conservation/metaType, not an unrelated check, or the case is passing
+    // for the wrong reason.
+    std::pair<bool, std::string> runNegativeBufferCase(const std::string& secret, const std::string& token, const json& tv) {
+        const std::string buildFrom = tv.at("buildFrom").get<std::string>();
+        const std::string balance = std::to_string(tv.at("sourceBalance").get<long long>());
+        const std::string amount = std::to_string(tv.at("amount").get<long long>());
+        const auto& tamper = tv.at("tamper");
+        const std::string target = tamper.at("target").get<std::string>();
+        const std::string field = tamper.at("field").get<std::string>();
+        const std::string to = tamper.at("to").get<std::string>();
+
+        Wallet source(secret, token);
+        source.balance = balance;
+
+        Molecule mol;
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+
+        if (buildFrom == "deposit") {
+            Wallet buffer(secret, token);
+            Wallet remainder(secret, token);
+            mol.remainderWallet = std::make_shared<Wallet>(remainder);
+            mol.initDepositBuffer(source, buffer, remainder, amount);
+        } else if (buildFrom == "withdraw") {
+            Wallet recipient(secret, token);
+            recipient.bundle = source.bundle;
+            recipient.address = "";
+            recipient.position = "";
+            mol.remainderWallet = std::make_shared<Wallet>(source);
+            mol.initWithdrawBuffer(source, {recipient}, {amount}, source);
+        } else {
+            throw std::runtime_error("unknown buildFrom '" + buildFrom + "'");
+        }
+        setFixedTimestamps(mol);
+
+        // Select the first/last atom of the target isotope, in emission order —
+        // exactly as the vector's `recipe` field specifies.
+        std::string isotope;
+        if (target == "firstV" || target == "lastV") isotope = "V";
+        else if (target == "firstB" || target == "lastB") isotope = "B";
+        else throw std::runtime_error("unknown tamper target '" + target + "'");
+
+        std::vector<size_t> matching;
+        for (size_t i = 0; i < mol.atoms.size(); ++i) {
+            if (mol.atoms[i].isotope == isotope) matching.push_back(i);
+        }
+        if (matching.empty()) {
+            throw std::runtime_error("no " + isotope + " atoms in molecule to tamper (target " + target + ")");
+        }
+        size_t idx = (target.rfind("first", 0) == 0) ? matching.front() : matching.back();
+
+        if (field == "value") {
+            mol.atoms[idx].value = to;
+        } else if (field == "metaType") {
+            mol.atoms[idx].metaType = to;
+        } else {
+            throw std::runtime_error("unknown tamper field '" + field + "'");
+        }
+
+        // Re-sign over the tampered atoms: recomputes molecularHash + OTS fragments
+        // so the molecule is internally consistent and only the tampered conservation
+        // invariant (or metaType) is wrong — not the hash/signature.
+        mol.sign(secret, false);
+
+        bool verified = Molecule::verify(mol);
+        if (verified) {
+            return {false, "ACCEPTED (expected rejection)"};
+        }
+        return {true, "verify() returned false"};
+    }
+
     // Buffer family (B-isotope) builders + the verifyTokenIsotopeV cross-isotope bypass — VECTOR-DRIVEN
     // (cycle 151) against the shared canonical-patent-vectors.json, matching the other SDKs
     // (JS/TS/PHP/Kotlin/Rust/Python). For each buffer_deposit_conservation / buffer_withdraw_conservation
@@ -689,8 +835,22 @@ private:
             std::ifstream f;
             for (const auto& p : candidates) { f.open(p); if (f.is_open()) break; f.clear(); }
             if (!f.is_open()) {
+                // In an orchestrated cross-SDK run the vectors are mandatory: silently
+                // skipping parity coverage is the false-green this gate exists to stop.
+                const char* require = std::getenv("KNISHIO_REQUIRE_VECTORS");
+                const bool must_have = require && std::string(require) == "true";
+                results_.buffer_family = {
+                    .passed = false,
+                    .skipped = !must_have,
+                    .validation_error = "canonical-patent-vectors.json absent"
+                };
+                if (must_have) {
+                    Logger::message("  FAILED: canonical-patent-vectors.json absent "
+                                    "(KNISHIO_REQUIRE_VECTORS=true)", colors::RED);
+                    return false;
+                }
                 Logger::message("  SKIPPED: canonical-patent-vectors.json absent (standalone CI)", colors::YELLOW);
-                return true; // skip, not fail
+                return true; // skip, not fail — recorded as skipped, never counted as a pass
             }
             json vectors = json::parse(f);
             const auto& v = vectors.at("vectors");
@@ -761,6 +921,38 @@ private:
                 Logger::test("withdraw " + name + " conserves (B+V sum 0; cross-isotope bypass)", ok);
                 all_pass = all_pass && ok;
                 last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
+            }
+
+            // ---- NEGATIVE: tampered buffer molecules the validator MUST reject. This
+            // vector set exists to close a coverage hole: a positive-only suite never
+            // observes rejection, so it can't tell a real conservation check apart from
+            // an absent one (see buffer_conservation_negative.description). ----
+            if (v.contains("buffer_conservation_negative")) {
+                for (const auto& tv : v.at("buffer_conservation_negative").at("tests")) {
+                    const std::string name = tv.at("name").get<std::string>();
+                    bool rejected = false;
+                    std::string reason;
+                    try {
+                        auto result = runNegativeBufferCase(secret, token, tv);
+                        rejected = result.first;
+                        reason = result.second;
+                    } catch (const std::exception& e) {
+                        rejected = false;
+                        reason = std::string("builder/tamper setup failed: ") + e.what();
+                    }
+                    std::cout << "    reason: " << reason << std::endl;
+                    Logger::test("negative " + name + " rejected", rejected, rejected ? "" : reason);
+                    all_pass = all_pass && rejected;
+                }
+            } else {
+                const char* require = std::getenv("KNISHIO_REQUIRE_VECTORS");
+                const bool must_have = require && std::string(require) == "true";
+                if (must_have) {
+                    Logger::message("  FAILED: buffer_conservation_negative absent (KNISHIO_REQUIRE_VECTORS=true)", colors::RED);
+                    all_pass = false;
+                } else {
+                    Logger::message("  SKIPPED: buffer_conservation_negative absent (vector not yet vendored)", colors::YELLOW);
+                }
             }
 
             results_.buffer_family = {
@@ -1361,27 +1553,44 @@ private:
     bool testCrossSdkValidation() {
         Logger::message("\n7. Cross-SDK Validation", colors::BLUE);
 
-        // Check if cross-validation is disabled (Round 1 molecule generation only)
+        // Round 1 generates molecules and does not cross-validate, so it holds no opinion
+        // here and must not leave a verdict behind. This set cross_sdk_compatible = true,
+        // so a Round-1 results file claimed full cross-SDK compatibility having validated
+        // nothing at all.
         const char* disable_cross_validation_env = std::getenv("KNISHIO_DISABLE_CROSS_VALIDATION");
         if (disable_cross_validation_env && std::string(disable_cross_validation_env) == "true") {
             Logger::message("  ⏭️  Cross-validation disabled for Round 1 (molecule generation only)", colors::YELLOW);
-            results_.cross_sdk_compatible = true;
+            results_.cross_validation_ran = false;
+            results_.cross_sdk_compatible = false;
+            results_.cross_targets_expected = 0;
+            results_.cross_targets_validated = 0;
             return true;
         }
 
         // Configurable shared results directory for cross-platform testing
         const char* shared_results_env = std::getenv("KNISHIO_SHARED_RESULTS");
         std::string shared_dir = shared_results_env ? shared_results_env : "../shared-test-results";
+        results_.cross_validation_ran = true;
 
-        // Check if results directory exists
+        // A missing shared directory in Round 2 is a HARD FAILURE, not a skip. This
+        // returned true — "compatible" — having found nothing to check. Absence of evidence
+        // must never be reported as evidence of compatibility.
         if (!std::filesystem::exists(shared_dir)) {
-            Logger::message("  ⏭️  No other SDK results found for cross-validation", colors::YELLOW);
-            results_.cross_sdk_compatible = true;
-            return true;
+            Logger::message("  ❌ Shared results directory not found — cross-validation CANNOT run", colors::RED);
+            results_.cross_sdk_compatible = false;
+            results_.cross_targets_expected = kExpectedPeerCount;
+            results_.cross_targets_validated = 0;
+            return false;
         }
 
         // Detailed cross-SDK validation matching JavaScript/Python/PHP pattern
         Logger::message("  📋 Loading molecules from other SDKs...", colors::CYAN);
+
+        // Canonical set mirrors requiredMoleculeKeys in sdks/canonical-test-keys.json.
+        static const std::array<const char*, 7> kRequiredMoleculeTypes = {
+            "metadata", "simpleTransfer", "complexTransfer", "tokenCreation",
+            "walletCreation", "shadowWalletClaim", "mlkem768"
+        };
 
         bool all_valid = true;
         int sdk_count = 0;
@@ -1422,6 +1631,33 @@ private:
                 json sdk_results;
                 result_file >> sdk_results;
                 result_file.close();
+
+                // A peer must publish every molecule type before we can claim to have
+                // validated it. The loops below iterate the keys that are PRESENT, so an
+                // omitted molecule is indistinguishable from a validated one — which is how
+                // Kotlin's Round-2 drop of tokenCreation/walletCreation/shadowWalletClaim
+                // passed every peer on 2026-07-27.
+                {
+                    std::vector<std::string> absent;
+                    for (const char* required : kRequiredMoleculeTypes) {
+                        const bool present = sdk_results.contains("molecules")
+                            && sdk_results["molecules"].contains(required)
+                            && sdk_results["molecules"][required].is_string()
+                            && !sdk_results["molecules"][required].get<std::string>().empty();
+                        if (!present) absent.emplace_back(required);
+                    }
+                    if (!absent.empty()) {
+                        std::string joined;
+                        for (size_t i = 0; i < absent.size(); ++i) {
+                            if (i) joined += ", ";
+                            joined += absent[i];
+                        }
+                        Logger::message("    ❌ " + display_name + " published no molecule for: " + joined,
+                                        colors::RED);
+                        Logger::test(display_name + " publishes all required molecules", false);
+                        all_valid = false;
+                    }
+                }
 
                 // Validate molecules from other SDK
                 if (sdk_results.contains("molecules")) {
@@ -1558,22 +1794,40 @@ private:
             }
         }
 
-        // Summary
+        // Summary.
+        //
+        // Zero peers in Round 2 means Round 2 did not happen. This returned true —
+        // "compatible" — having validated nothing whatsoever.
+        results_.cross_targets_expected = kExpectedPeerCount;
+        results_.cross_targets_validated = sdk_count;
+
         if (sdk_count == 0) {
-            Logger::message("\n  ⏭️  No other SDK results found for cross-validation", colors::YELLOW);
-            results_.cross_sdk_compatible = true;
-            return true;
+            Logger::message("\n  ❌ No peer SDK results found — nothing to cross-validate", colors::RED);
+            results_.cross_sdk_compatible = false;
+            return false;
         }
 
+        // COVERAGE FLOOR. `all_valid` starts true and only becomes false on a DETECTED
+        // failure, so it records "nothing went wrong", not "everything was checked". Those
+        // differ whenever fewer peers were examined than expected. Require both.
+        const bool full_coverage = (sdk_count == kExpectedPeerCount);
+        if (!full_coverage) {
+            Logger::message("\n  ❌ Incomplete coverage: validated " + std::to_string(sdk_count) + "/"
+                            + std::to_string(kExpectedPeerCount) + " peer SDKs", colors::RED);
+        }
+        Logger::message("  📊 Cross-validation coverage: " + std::to_string(sdk_count) + "/"
+                        + std::to_string(kExpectedPeerCount) + " peer SDKs", colors::CYAN);
+
         Logger::message("", colors::RESET);
-        if (all_valid) {
+        const bool compatible = all_valid && full_coverage;
+        if (compatible) {
             Logger::message("  ✅ All cross-SDK molecules validated successfully", colors::GREEN);
         } else {
             Logger::message("  ❌ Some cross-SDK validations failed", colors::RED);
         }
 
-        results_.cross_sdk_compatible = all_valid;
-        return all_valid;
+        results_.cross_sdk_compatible = compatible;
+        return compatible;
     }
     
     bool saveResults() {
@@ -1646,6 +1900,14 @@ private:
                 {"validationError", results_.shadow_wallet_claim.validation_error}
             };
 
+            tests["bufferFamily"] = {
+                {"passed", results_.buffer_family.passed},
+                {"skipped", results_.buffer_family.skipped},
+                {"molecularHash", results_.buffer_family.molecular_hash},
+                {"atomCount", results_.buffer_family.atom_count},
+                {"validationError", results_.buffer_family.validation_error}
+            };
+
             tests["mlkem768"] = {
                 {"passed", results_.mlkem768.passed},
                 {"publicKeyGenerated", results_.mlkem768.public_key_generated},
@@ -1653,11 +1915,17 @@ private:
                 {"decryptionSuccess", results_.mlkem768.decryption_success},
                 {"plaintextLength", results_.mlkem768.plaintext_length}
             };
-            
+
             if (!results_.mlkem768.error.empty()) {
                 tests["mlkem768"]["error"] = results_.mlkem768.error;
             }
-            
+
+            tests["negativeCases"] = {
+                {"passed", results_.negative_cases.passed},
+                {"description", results_.negative_cases.description},
+                {"testCount", results_.negative_cases.testCount}
+            };
+
             root["tests"] = tests;
             
             // Molecules object
@@ -1671,9 +1939,25 @@ private:
             molecules["mlkem768"] = results_.molecules_mlkem768;
             root["molecules"] = molecules;
             
-            // Cross-SDK compatibility
+            // Cross-SDK compatibility, plus the coverage behind the verdict. The boolean
+            // alone is not falsifiable by a reader: true could mean "checked seven peers,
+            // all good" or "checked nothing".
             root["crossSdkCompatible"] = results_.cross_sdk_compatible;
-            
+            root["crossValidation"] = {
+                {"ran", results_.cross_validation_ran},
+                {"targetsExpected", results_.cross_targets_expected},
+                {"targetsValidated", results_.cross_targets_validated}
+            };
+
+            // Run identity. shared-test-results/ holds one mutable file per SDK with no
+            // record of which run wrote it, so a later standalone run silently replaces the
+            // evidence an already-published report was built from.
+            if (const char* run_id = std::getenv("KNISHIO_RUN_ID"); run_id && *run_id) {
+                root["runId"] = std::string(run_id);
+            } else {
+                root["runId"] = nullptr;
+            }
+
             // Write to file
             std::ofstream file(results_path);
             if (!file.is_open()) {
@@ -1702,9 +1986,12 @@ private:
         std::cout << "SDK: C++ v" << results_.version << std::endl;
         std::cout << "Timestamp: " << results_.timestamp << std::endl;
         
-        // Count passed tests
+        // Count passed tests. Skipped tests are reported separately — counting a
+        // skip as either a pass or a failure is what made this summary contradict
+        // the exit-code gate.
         int total_tests = 10;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + negative
         int passed_tests = 0;
+        int skipped_tests = 0;
         if (results_.crypto.passed) passed_tests++;
         if (results_.meta_creation.passed) passed_tests++;
         if (results_.simple_transfer.passed) passed_tests++;
@@ -1713,14 +2000,23 @@ private:
         if (results_.wallet_creation.passed) passed_tests++;
         if (results_.shadow_wallet_claim.passed) passed_tests++;
         if (results_.buffer_family.passed) passed_tests++;
+        else if (results_.buffer_family.skipped) skipped_tests++;
         if (results_.mlkem768.passed) passed_tests++;
         if (results_.negative_cases.passed) passed_tests++;
-        
-        const char* color = (passed_tests == total_tests) ? colors::GREEN : colors::RED;
+
+        const int failed_tests = total_tests - passed_tests - skipped_tests;
+        const char* color = (failed_tests == 0) ? colors::GREEN : colors::RED;
         std::cout << "\n" << color << "Tests Passed: " << passed_tests << "/" << total_tests << colors::RESET << std::endl;
-        
+        if (skipped_tests > 0) {
+            std::cout << colors::YELLOW << "Tests Skipped: " << skipped_tests << "/" << total_tests
+                      << colors::RESET << std::endl;
+            if (results_.buffer_family.skipped) {
+                std::cout << "  - bufferFamily: " << results_.buffer_family.validation_error << std::endl;
+            }
+        }
+
         // Show failed tests
-        if (passed_tests < total_tests) {
+        if (failed_tests > 0) {
             std::cout << "\n" << colors::RED << "Failed Tests:" << colors::RESET << std::endl;
             if (!results_.crypto.passed) {
                 std::cout << "  - crypto: " << results_.crypto.error << std::endl;
@@ -1743,7 +2039,7 @@ private:
             if (!results_.shadow_wallet_claim.passed) {
                 std::cout << "  - shadowWalletClaim: Validation failed" << std::endl;
             }
-            if (!results_.buffer_family.passed) {
+            if (!results_.buffer_family.passed && !results_.buffer_family.skipped) {
                 std::cout << "  - bufferFamily: " << results_.buffer_family.validation_error << std::endl;
             }
             if (!results_.mlkem768.passed) {

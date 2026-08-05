@@ -48,6 +48,10 @@ public:
 	static bool verifyMolecularHash(const Molecule &molecule);
 	static bool verifyOts(const Molecule &molecule);
 	static bool verifyTokenIsotopeV(const Molecule &molecule);
+	// Conservation + meta-shape validation for B/F (buffer-family) molecules. Mirrors
+	// isotopeB()/isotopeF() in the JS reference; verifyTokenIsotopeV() delegates to this
+	// when it skips the V-only sum, so that the skip is not an unconditional accept.
+	static bool verifyCrossIsotopeConservation(const Molecule &molecule);
 
 private:
 	// Appends the ContinuID (I-isotope) atom, mirroring JS Molecule.addContinuIdAtom():

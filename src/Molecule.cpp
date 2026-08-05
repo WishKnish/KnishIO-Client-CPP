@@ -912,6 +912,77 @@ bool Molecule::verifyOts(const Molecule &molecule)
    * @return {boolean}
    * @throws {TypeError}
    */
+/**
+ * Conservation and meta-shape validation for cross-isotope (B/F) molecules.
+ *
+ * Mirrors isotopeB()/isotopeF() in the JavaScript reference (CheckMolecule.js:395-486):
+ *   - every B/F atom must carry metaType "walletBundle" and a non-empty metaId
+ *   - F atom values must not be negative
+ *   - the combined V+B (and V+F) atom values must sum to zero
+ *
+ * This is what verifyTokenIsotopeV() delegates to when it skips the V-only sum. Without
+ * it that skip is an unconditional accept.
+ */
+bool Molecule::verifyCrossIsotopeConservation(const Molecule &molecule)
+{
+	long double crossSum = 0.0L;
+	bool sawCrossIsotope = false;
+
+	for (const auto &atom : molecule.atoms)
+	{
+		const bool isB = (atom.isotope == "B");
+		const bool isF = (atom.isotope == "F");
+
+		if (isB || isF)
+		{
+			sawCrossIsotope = true;
+
+			// B/F atoms must reference a wallet bundle
+			if (atom.metaType != "walletBundle" || atom.metaId.empty())
+			{
+				return false;
+			}
+		}
+		else if (atom.isotope != "V")
+		{
+			continue;
+		}
+
+		// V, B and F atom values all participate in the combined conservation sum
+		if (atom.value.empty())
+		{
+			continue;
+		}
+
+		long double parsed = 0.0L;
+		try
+		{
+			parsed = std::stold(atom.value);
+		}
+		catch (const std::exception &)
+		{
+			// A value that will not parse is malformed, not zero
+			return false;
+		}
+
+		// F atoms must not be negative
+		if (isF && parsed < 0.0L)
+		{
+			return false;
+		}
+
+		crossSum += parsed;
+	}
+
+	if (!sawCrossIsotope)
+	{
+		return true;
+	}
+
+	// Combined V+B / V+F conservation
+	return std::fabsl(crossSum) < 1e-9L;
+}
+
 bool Molecule::verifyTokenIsotopeV(const Molecule &molecule)
 {
 	if (molecule.atoms.empty() || molecule.molecularHash.empty())
@@ -920,14 +991,19 @@ bool Molecule::verifyTokenIsotopeV(const Molecule &molecule)
 	}
 
 	// Cross-isotope (buffer-family) molecules carry the balancing weight on B/F atoms, so the V-only
-	// sum is non-zero by construction. Bypass the V-conservation check when a B or F atom is present
-	// (validator-enforced full conservation; JS CheckMolecule.isotopeV / Kotlin c145 parity). Gated on
-	// hasCrossIsotope -> V-only molecules take the identical path below (the frozen hashes are unaffected).
+	// sum below is non-zero by construction and must be skipped. But skipping it is only sound if
+	// something else enforces conservation over the combined set.
+	//
+	// This previously read `if (hasCrossIsotope) { return true; }` — an unconditional accept of ANY
+	// molecule containing a B or F atom. The comment cited "JS CheckMolecule.isotopeV parity", but JS
+	// pairs that bypass with isotopeB()/isotopeF(), which enforce V+B / V+F conservation and the B/F
+	// meta shape. C++ had no equivalent, so a buffer molecule that created or destroyed value verified
+	// clean. Deferring to "validator-enforced conservation" is not client-side validation.
 	bool hasCrossIsotope = std::any_of(molecule.atoms.begin(), molecule.atoms.end(),
 		[](const Atom &a){ return a.isotope == "B" || a.isotope == "F"; });
 	if (hasCrossIsotope)
 	{
-		return true;
+		return verifyCrossIsotopeConservation(molecule);
 	}
 
 	// summ of V-isotope values for each token should be 0

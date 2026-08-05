@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # Project definition
 project(KnishIOClientCPP
-    VERSION 0.9.2
+    VERSION 0.9.3
     DESCRIPTION "KnishIO DLT Client SDK for C++"
     HOMEPAGE_URL "https://github.com/knishio"
     LANGUAGES CXX C  # Enable C for mlkem-native integration
@@ -27,11 +27,25 @@ if(NOT CMAKE_BUILD_TYPE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+# Tune for the building machine's exact CPU. Correct for local builds, and WRONG for
+# any binary that will be distributed: -march=native emits instructions for the build
+# host's microarchitecture, so a release built on a CI runner can SIGILL on a user's
+# older CPU. Defaults ON so local and benchmark builds are byte-for-byte unchanged;
+# the publish workflow sets it OFF to produce portable release artifacts.
+option(KNISHIO_NATIVE_ARCH "Optimize for the build host's CPU (-march=native). Turn OFF for distributable binaries." ON)
+
+if(KNISHIO_NATIVE_ARCH)
+    set(_KNISHIO_ARCH_FLAGS " -march=native -mtune=native")
+else()
+    set(_KNISHIO_ARCH_FLAGS "")
+    message(STATUS "KNISHIO_NATIVE_ARCH=OFF — building portable binaries (no -march=native)")
+endif()
+
 # Compiler-specific optimizations
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # Performance optimizations for Release builds
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -DNDEBUG")
-    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -march=native -mtune=native -DNDEBUG")
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3${_KNISHIO_ARCH_FLAGS} -DNDEBUG")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g${_KNISHIO_ARCH_FLAGS} -DNDEBUG")
     
     # Security hardening flags
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fstack-protector-strong -D_FORTIFY_SOURCE=2")
