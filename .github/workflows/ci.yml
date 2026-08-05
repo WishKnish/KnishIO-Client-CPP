@@ -11,13 +11,25 @@ name: CI
 on: [push, pull_request]
 
 jobs:
+  # Catch version drift at commit time, not at release time. The publish workflow already
+  # refuses a tag that disagrees with the manifest, but that only fires on a tag push, so
+  # drift can sit in master until release day. Same script, no expected version: assert only
+  # that the repo agrees with itself.
+  version:
+    name: version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Declared versions agree
+        run: bash .github/scripts/check-version.sh
+
   gate:
     name: build + self-test + clang-tidy
     runs-on: ubuntu-latest
     steps:
       # submodules: recursive fetches external/mlkem-native (the ML-KEM768 backend the
       # C++ build GLOBs + includes); without it CI fails with "'mlkem_native.h' not found".
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -68,7 +80,7 @@ jobs:
     steps:
       # fetch-depth: 0 — the gate diffs against the base commit, which a shallow
       # checkout would not have. No submodules needed: this job only reads text.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
