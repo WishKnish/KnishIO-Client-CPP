@@ -56,7 +56,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
       # THREE independent places declare "what version is this SDK": CMakeLists.txt's
       # project(... VERSION ...), the SDK_VERSION literal in src/KnishIOClient.cpp (returned
@@ -95,7 +95,7 @@ jobs:
             platform: macos-arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           submodules: recursive   # fetch external/mlkem-native (vendored ML-KEM768)
 
@@ -188,7 +188,7 @@ jobs:
       - name: Create tarball
         run: tar czf "dist/${STAGE_NAME}.tar.gz" -C dist "$STAGE_NAME"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: ${{ matrix.platform }}
           path: dist/*.tar.gz
@@ -200,13 +200,13 @@ jobs:
     if: github.event_name == 'push'   # dispatch = dry run; never creates a Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
         with:
           path: dist
           merge-multiple: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3
         with:
           generate_release_notes: true
           files: dist/*.tar.gz
