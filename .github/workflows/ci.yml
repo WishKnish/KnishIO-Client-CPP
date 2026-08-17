@@ -19,7 +19,7 @@ jobs:
     name: version consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Declared versions agree
         run: bash .github/scripts/check-version.sh
 
@@ -29,7 +29,7 @@ jobs:
     steps:
       # submodules: recursive fetches external/mlkem-native (the ML-KEM768 backend the
       # C++ build GLOBs + includes); without it CI fails with "'mlkem_native.h' not found".
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: recursive
 
@@ -80,7 +80,7 @@ jobs:
     steps:
       # fetch-depth: 0 — the gate diffs against the base commit, which a shallow
       # checkout would not have. No submodules needed: this job only reads text.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
