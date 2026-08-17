@@ -122,7 +122,10 @@ file(GLOB MLKEM_NATIVE_SOURCES
     external/mlkem-native/mlkem/src/fips202/fips202.c
     external/mlkem-native/mlkem/src/fips202/keccakf1600.c
     external/mlkem-native/mlkem/src/fips202/fips202x4.c
-    external/mlkem-native/test/notrandombytes/notrandombytes.c
+    # NOTE: external/mlkem-native/test/notrandombytes/notrandombytes.c is deliberately
+    # NOT compiled. It is a constant-seed TEST RNG. Encapsulation uses the derandomized
+    # API with CSPRNG coins (src/Wallet.cpp), and MLK_CONFIG_NO_RANDOMIZED_API (below)
+    # compiles out the randomized path that would have required randombytes().
 )
 
 # Source files
@@ -188,7 +191,7 @@ target_compile_definitions(knishio-client-cpp PUBLIC HAVE_MLKEM_NATIVE=1)
 # Configure mlkem-native source files with specific compiler definitions
 foreach(MLKEM_FILE ${MLKEM_NATIVE_SOURCES})
     set_source_files_properties(${MLKEM_FILE} PROPERTIES
-        COMPILE_DEFINITIONS "MLK_CONFIG_PARAMETER_SET=768;MLK_CONFIG_NAMESPACE_PREFIX=mlkem"
+        COMPILE_DEFINITIONS "MLK_CONFIG_PARAMETER_SET=768;MLK_CONFIG_NAMESPACE_PREFIX=mlkem;MLK_CONFIG_NO_RANDOMIZED_API"
         LANGUAGE C  # Ensure C compilation for mlkem-native files
     )
 endforeach()

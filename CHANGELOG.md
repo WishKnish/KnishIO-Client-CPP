@@ -14,6 +14,25 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [Unreleased]
+
+### Security
+
+- **ML-KEM-768 encapsulation now draws its randomness from the platform CSPRNG.** It
+  previously used the mlkem-native *test* RNG stub (`external/mlkem-native/test/notrandombytes/notrandombytes.c`,
+  a SURF PRNG seeded with a compile-time constant — the digits of π), which was compiled
+  into the shipped library and supplied the only `randombytes()` in the link. Because ML-KEM
+  derandomizes K-PKE (`r = G(m ‖ H(ek))`), the 32-byte message `m` is the sole entropy in an
+  encapsulation — so every process replayed the same sequence of ciphertexts and shared
+  secrets, making the AES-256-GCM key of any *sent* message recoverable by an attacker.
+  `src/Wallet.cpp` (`encryptMessageML768`) now generates `m` with OpenSSL `RAND_bytes` and
+  calls the derandomized `crypto_kem_enc_derand`; `MLK_CONFIG_NO_RANDOMIZED_API` compiles out
+  the randomized path (and the stub) entirely, and `notrandombytes.c` is removed from the
+  build. Decapsulation, key generation, and cross-SDK parity are byte-unchanged (self-test
+  10/10, Cross-SDK ✅, 6 frozen molecular hashes intact). A new cross-process determinism test
+  (`tests/mlkem_encaps_entropy.cpp`, CTest `MlkemEncapsEntropy`) fails on the old behavior and
+  passes on the fix.
+
 ## [0.9.3] — 2026-08-05
 
 ### Added

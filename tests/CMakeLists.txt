@@ -68,6 +68,29 @@ set_tests_properties(CipherHashLive PROPERTIES
     TIMEOUT 60
 )
 
+# Prove-the-gate: ML-KEM encapsulation must draw its message m from a fresh CSPRNG,
+# not the mlkem-native test RNG stub. Cross-process determinism = the bug.
+# See run_encaps_entropy_twice.cmake.
+add_executable(mlkem_encaps_entropy mlkem_encaps_entropy.cpp)
+target_link_libraries(mlkem_encaps_entropy
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(mlkem_encaps_entropy PRIVATE cxx_std_20)
+set_target_properties(mlkem_encaps_entropy PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME MlkemEncapsEntropy
+    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:mlkem_encaps_entropy>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_encaps_entropy_twice.cmake
+)
+set_tests_properties(MlkemEncapsEntropy PROPERTIES
+    LABELS "crypto;rng;pq"
+    TIMEOUT 60
+    REQUIRED_FILES $<TARGET_FILE:mlkem_encaps_entropy>
+)
+
 # Unit tests (if we add them later)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/unit_tests.cpp")
     add_executable(unit_tests unit_tests.cpp)

@@ -276,6 +276,8 @@ Makefile
 !CMakeLists.txt
 !cmake/*.cmake.in
 !cmake/KnishIOClientCPPConfig.cmake.in
+# CTest -P driver for MlkemEncapsEntropy (source, not a build artifact)
+!tests/run_encaps_entropy_twice.cmake
 
 ### C++ build artifacts
 *.o

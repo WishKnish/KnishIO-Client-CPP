@@ -349,16 +349,27 @@ std::map<std::string, std::string> Wallet::encryptMessageML768(const std::string
             "(upgrade the validator to a PQ-transport build), or authenticate with encrypt=false.");
     }
     
-    // Encapsulate to generate shared secret and ciphertext
+    // Encapsulate to generate shared secret and ciphertext. Draw the 32-byte KEM message m
+    // from the platform CSPRNG (OpenSSL RAND_bytes, the same source as the AES-GCM IV below)
+    // and use the DERANDOMIZED API. The randomized crypto_kem_enc() is compiled out via
+    // MLK_CONFIG_NO_RANDOMIZED_API, so the mlkem-native test RNG stub can never be linked.
     std::vector<uint8_t> ciphertext(1088);      // MLKEM768_CIPHERTEXTBYTES
     std::vector<uint8_t> shared_secret(32);     // MLKEM768_SHAREDSECRETBYTES
-    
-    int result = crypto_kem_enc(
+    std::vector<uint8_t> coins(32);             // MLKEM_SYMBYTES: the KEM message m
+
+    if (RAND_bytes(coins.data(), static_cast<int>(coins.size())) != 1) {
+        sodium_memzero(coins.data(), coins.size());
+        throw std::runtime_error("ML-KEM768 encapsulation RNG failed");
+    }
+
+    int result = crypto_kem_enc_derand(
         ciphertext.data(),
-        shared_secret.data(), 
-        recipient_key_bytes.data()
+        shared_secret.data(),
+        recipient_key_bytes.data(),
+        coins.data()
     );
-    
+    sodium_memzero(coins.data(), coins.size());
+
     if (result != 0) {
         throw std::runtime_error("ML-KEM768 encapsulation failed");
     }
