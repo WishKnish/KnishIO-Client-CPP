@@ -29,3 +29,10 @@ updates:
           - "*"
     commit-message:
       prefix: "ci"
+
+  # No library ecosystem here on purpose. This SDK's only third-party code is
+  # external/mlkem-native, a pinned git SUBMODULE — an ecosystem Dependabot's version updates
+  # do not cover. Bumping it is a deliberate act (`git submodule update --remote` + re-running
+  # the frozen ML-KEM768 vectors), not something to automate behind a PR. The system-level
+  # build deps (libsodium, curl, openssl) come from the runner's package manager and are
+  # equally outside Dependabot's reach. Nothing to add — do not "fix" this omission.

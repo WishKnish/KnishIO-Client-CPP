@@ -56,7 +56,10 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
+      # persist-credentials: false (2026-08) — nothing here pushes; the Release uses GITHUB_TOKEN, not git config.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       # THREE independent places declare "what version is this SDK": CMakeLists.txt's
       # project(... VERSION ...), the SDK_VERSION literal in src/KnishIOClient.cpp (returned
@@ -98,6 +101,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: recursive   # fetch external/mlkem-native (vendored ML-KEM768)
+          persist-credentials: false
 
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'

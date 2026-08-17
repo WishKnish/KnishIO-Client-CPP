@@ -306,3 +306,9 @@ build/
 
 # macOS
 **/.DS_Store
+
+# Local editor / toolchain cruft (regenerated or downloaded, never committed)
+# clangd index cache
+/.cache/
+# LLVM installer; CI wgets it fresh from apt.llvm.org
+/llvm.sh
