@@ -110,24 +110,10 @@ configure_file(
 )
 include_directories("${CMAKE_CURRENT_BINARY_DIR}/include")
 
-# mlkem-native source files for ML-KEM768 JavaScript compatibility
-file(GLOB MLKEM_NATIVE_SOURCES 
-    external/mlkem-native/mlkem/src/kem.c
-    external/mlkem-native/mlkem/src/indcpa.c
-    external/mlkem-native/mlkem/src/poly.c
-    external/mlkem-native/mlkem/src/poly_k.c
-    external/mlkem-native/mlkem/src/compress.c
-    external/mlkem-native/mlkem/src/sampling.c
-    external/mlkem-native/mlkem/src/verify.c
-    external/mlkem-native/mlkem/src/fips202/fips202.c
-    external/mlkem-native/mlkem/src/fips202/keccakf1600.c
-    external/mlkem-native/mlkem/src/fips202/fips202x4.c
-    # NOTE: external/mlkem-native/test/notrandombytes/notrandombytes.c is deliberately
-    # NOT compiled. It is a constant-seed TEST RNG. Encapsulation uses the derandomized
-    # API with CSPRNG coins (src/Wallet.cpp), and MLK_CONFIG_NO_RANDOMIZED_API (below)
-    # compiles out the randomized path that would have required randombytes().
+# mlkem-native source file for multilevel FIPS 203 compatibility
+set(MLKEM_NATIVE_SOURCES
+    src/crypto/mlkem_native_multilevel.c
 )
-
 # Source files
 set(KNISHIO_SOURCES
     src/Atom.cpp
@@ -185,16 +171,13 @@ set_target_properties(knishio-client-cpp PROPERTIES
 # Target compile features
 target_compile_features(knishio-client-cpp PUBLIC cxx_std_20)
 
-# mlkem-native configuration for ML-KEM768 JavaScript compatibility
-target_compile_definitions(knishio-client-cpp PUBLIC HAVE_MLKEM_NATIVE=1)
-
-# Configure mlkem-native source files with specific compiler definitions
-foreach(MLKEM_FILE ${MLKEM_NATIVE_SOURCES})
-    set_source_files_properties(${MLKEM_FILE} PROPERTIES
-        COMPILE_DEFINITIONS "MLK_CONFIG_PARAMETER_SET=768;MLK_CONFIG_NAMESPACE_PREFIX=mlkem;MLK_CONFIG_NO_RANDOMIZED_API"
-        LANGUAGE C  # Ensure C compilation for mlkem-native files
-    )
-endforeach()
+# mlkem-native configuration for ML-KEM multilevel build
+target_compile_definitions(knishio-client-cpp PUBLIC
+    HAVE_MLKEM_NATIVE=1
+    MLK_CONFIG_MULTILEVEL_BUILD=1
+    MLK_CONFIG_NO_SUPERCOP=1
+    MLK_CONFIG_NO_RANDOMIZED_API=1
+)
 
 # Link libraries
 target_link_libraries(knishio-client-cpp
@@ -234,8 +217,12 @@ set_target_properties(knishio-client-cpp-static PROPERTIES
 )
 target_compile_features(knishio-client-cpp-static PUBLIC cxx_std_20)
 
-# mlkem-native configuration for static library
-target_compile_definitions(knishio-client-cpp-static PUBLIC HAVE_MLKEM_NATIVE=1)
+target_compile_definitions(knishio-client-cpp-static PUBLIC
+    HAVE_MLKEM_NATIVE=1
+    MLK_CONFIG_MULTILEVEL_BUILD=1
+    MLK_CONFIG_NO_SUPERCOP=1
+    MLK_CONFIG_NO_RANDOMIZED_API=1
+)
 
 target_link_libraries(knishio-client-cpp-static
     PUBLIC

@@ -351,7 +351,7 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     std::string postData;
     if (pImpl_->cipherEnabled && pImpl_->cipherWallet && pImpl_->serverPubKey.has_value()
         && shouldEncryptRequest(request)) {
-        std::string envelope = pImpl_->cipherWallet->encryptStringML768(
+        std::string envelope = pImpl_->cipherWallet->encryptStringML(
             request.toJsonString(), pImpl_->serverPubKey.value());
         Request wrapped;
         wrapped.query = CIPHER_HASH_QUERY;
@@ -417,7 +417,7 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
                 && env["data"].contains("CipherHash") && env["data"]["CipherHash"].is_object()
                 && env["data"]["CipherHash"].contains("hash")
                 && env["data"]["CipherHash"]["hash"].is_string()) {
-                std::string decrypted = pImpl_->cipherWallet->decryptMyMessageML768(
+                std::string decrypted = pImpl_->cipherWallet->decryptMyMessageML(
                     env["data"]["CipherHash"]["hash"].get<std::string>());
                 if (!decrypted.empty()) {
                     response.body = decrypted;

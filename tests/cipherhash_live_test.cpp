@@ -28,9 +28,13 @@ int main() {
     try {
         const std::string secret = knishio::KnishIOClient::generateSecret(2048);
 
+        const char* param_env = std::getenv("CIPHERHASH_MLKEM_PARAMETER_SET");
+        int param = (param_env && std::string(param_env) == "768") ? 768 : 1024;
+
         auto client = knishio::KnishIOClient::Builder()
             .uris({url})
             .timeout(std::chrono::milliseconds(15000))
+            .mlKemParameterSet(param)
             .build();
 
         // ONE authenticated session (encrypt=true → conveys the AUTH wallet's ML-KEM pubkey as a

@@ -106,6 +106,10 @@ KnishIOClient::Builder& KnishIOClient::Builder::retryDelay(std::chrono::millisec
     config_.retryDelay = delay;
     return *this;
 }
+KnishIOClient::Builder& KnishIOClient::Builder::mlKemParameterSet(int parameterSet) {
+    config_.mlKemParameterSet = parameterSet;
+    return *this;
+}
 
 std::unique_ptr<KnishIOClient> KnishIOClient::Builder::build() const {
     if (config_.uris.empty()) {
@@ -159,7 +163,7 @@ void KnishIOClient::setSecret(const std::string& secret) {
     pImpl_->secret = secret;
     
     // Generate wallet from secret
-    pImpl_->authWallet = std::make_unique<Wallet>(secret);
+    pImpl_->authWallet = std::make_unique<Wallet>(secret, "USER", "", 64, pImpl_->config.mlKemParameterSet);
     pImpl_->bundle = Wallet::generateBundleHash(secret);
     
     log("DEBUG", "Secret set and wallet initialized");
@@ -538,9 +542,9 @@ KnishIOClient::createWallet(const std::string& token) {
         const std::string sec = pImpl_->secret.value();
 
         const std::string livePos = resolveContinuIdPosition(getBundle());
-        Wallet source(sec, "USER", livePos);   // sign at the live ContinuID position
-        Wallet newWallet(sec, token);          // the wallet being defined (fresh position)
-        Wallet remainder(sec, "USER");         // fresh remainder (relay race)
+        Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
+        Wallet newWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet);          // the wallet being defined (fresh position)
+        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);         // fresh remainder (relay race)
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
         mol.sourceWallet = std::make_shared<Wallet>(source);
@@ -559,10 +563,10 @@ KnishIOClient::claimShadowWallet(const std::string& token, const std::string& ba
         const std::string sec = pImpl_->secret.value();
 
         const std::string livePos = resolveContinuIdPosition(getBundle());
-        Wallet source(sec, "USER", livePos);   // sign at the live ContinuID position
-        Wallet claimWallet(sec, token);        // the shadow wallet being claimed
+        Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
+        Wallet claimWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet);        // the shadow wallet being claimed
         claimWallet.batchId = batchId;         // -> walletBatchId meta (validator matches by it)
-        Wallet remainder(sec, "USER");         // fresh remainder
+        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);         // fresh remainder
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
         mol.sourceWallet = std::make_shared<Wallet>(source);
@@ -868,8 +872,8 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
         // random positions (Wallet default) so re-auth is OTS-safe. U-isotope ProposeMolecule is
         // PUBLIC (no prior token); the validator extracts the pubkey from the U-atom + issues a
         // bundle-scoped JWT.
-        Wallet source(sec, "AUTH");
-        Wallet remainder(sec, "USER");
+        Wallet source(sec, "AUTH", "", 64, pImpl_->config.mlKemParameterSet);
+        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);
         const std::string cell = cellSlug.value_or(pImpl_->config.cellSlug.value_or(std::string{}));
         Molecule mol(cell);
         mol.sourceWallet = std::make_shared<Wallet>(source);

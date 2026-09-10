@@ -20,9 +20,10 @@ namespace KnishIO {
    * @param {string | null} position - hexadecimal string used to salt the secret and produce one-time signatures
    * @param {number} saltLength - length of the position parameter that should be generated if position is not provided
    */
-Wallet::Wallet(const std::string &secret, const std::string &token, const std::string &position, size_t saltLength)
+Wallet::Wallet(const std::string &secret, const std::string &token, const std::string &position, size_t saltLength, int mlkemParameterSet)
 	: position(position)
 	, token(token)
+	, mlkem_parameter_set(mlkemParameterSet)
 {
 	// Position via which (combined with token) we will generate the one-time keys
 	if (this->position.empty())
@@ -38,8 +39,8 @@ Wallet::Wallet(const std::string &secret, const std::string &token, const std::s
 
 	generatePublicAndPrivateKeys(this->privkey, this->pubkey);
 	
-	// Initialize ML-KEM768 keys for JavaScript compatibility
-	initializeMLKEM();
+	// Initialize ML-KEM keys
+	initializeMLKEM(this->mlkem_parameter_set);
 }
 
 Wallet::~Wallet()
@@ -176,21 +177,37 @@ std::string Wallet::generateWalletAddress(const std::string &key)
 
 #ifdef HAVE_MLKEM_NATIVE
 extern "C" {
-    // mlkem-native configuration for ML-KEM768
+    #define MLK_CONFIG_API_NO_SUPERCOP
+    #define MLK_CONFIG_API_NO_RANDOMIZED_API
+
     #define MLK_CONFIG_API_PARAMETER_SET 768
-    #define MLK_CONFIG_API_NAMESPACE_PREFIX mlkem
+    #define MLK_CONFIG_API_NAMESPACE_PREFIX mlkem768
     #include "mlkem_native.h"
+    #undef MLK_CONFIG_API_PARAMETER_SET
+    #undef MLK_CONFIG_API_NAMESPACE_PREFIX
+    #undef MLK_H
+
+    #define MLK_CONFIG_API_NO_SUPERCOP
+    #define MLK_CONFIG_API_NO_RANDOMIZED_API
+    #define MLK_CONFIG_API_PARAMETER_SET 1024
+    #define MLK_CONFIG_API_NAMESPACE_PREFIX mlkem1024
+    #include "mlkem_native.h"
+    #undef MLK_CONFIG_API_PARAMETER_SET
+    #undef MLK_CONFIG_API_NAMESPACE_PREFIX
+    #undef MLK_H
 }
 #endif
 
-void Wallet::initializeMLKEM() {
+void Wallet::initializeMLKEM(int parameterSet) {
 #ifdef HAVE_MLKEM_NATIVE
     if (key.empty()) {
         return;
     }
+    if (parameterSet == 768 || parameterSet == 1024) {
+        mlkem_parameter_set = parameterSet;
+    }
     
     // Generate 64-byte seed from wallet key following JavaScript pattern exactly
-    // JavaScript: const seedHex = generateSecret(this.key, 128) → 128 hex chars (64-byte d‖z seed)
     auto seed_hex = knishio::KnishIOClient::generateSecret(key, 128);  // 128 hex chars = 64 bytes
 
     // Convert hex to bytes — full 64-byte seed, matching JS/Python
@@ -202,23 +219,31 @@ void Wallet::initializeMLKEM() {
         }
     }
     
-    // Resize vectors to correct ML-KEM768 sizes
-    mlkem_public_key.resize(1184);   // MLKEM768_PUBLICKEYBYTES
-    mlkem_private_key.resize(2400);  // MLKEM768_SECRETKEYBYTES
-    
-    // Generate deterministic ML-KEM768 keys using mlkem-native
-    int result = crypto_kem_keypair_derand(
-        mlkem_public_key.data(),
-        mlkem_private_key.data(),
-        seed_bytes.data()
-    );
-    
-    if (result != 0) {
-        throw std::runtime_error("Failed to generate ML-KEM768 keys");
+    int result = 0;
+    if (mlkem_parameter_set == 1024) {
+        mlkem_public_key.resize(1568);
+        mlkem_private_key.resize(3168);
+        result = mlkem1024_keypair_derand(
+            mlkem_public_key.data(),
+            mlkem_private_key.data(),
+            seed_bytes.data()
+        );
+    } else {
+        mlkem_public_key.resize(1184);
+        mlkem_private_key.resize(2400);
+        result = mlkem768_keypair_derand(
+            mlkem_public_key.data(),
+            mlkem_private_key.data(),
+            seed_bytes.data()
+        );
     }
     
-    // Update pubkey to ML-KEM768 public key (Base64 encoded like JavaScript)
-    pubkey = mlkem_public_key;  // Store raw bytes
+    if (result != 0) {
+        throw std::runtime_error("Failed to generate ML-KEM keys");
+    }
+    
+    // Update pubkey to ML-KEM public key (raw bytes)
+    pubkey = mlkem_public_key;
     
     // Securely clear seed
     sodium_memzero(seed_bytes.data(), seed_bytes.size());
@@ -334,48 +359,53 @@ std::vector<uint8_t> Wallet::decryptWithSharedSecret(const std::vector<uint8_t>&
     return plaintext;
 }
 
-std::map<std::string, std::string> Wallet::encryptMessageML768(const std::string& message, const std::string& recipient_pubkey) {
+std::map<std::string, std::string> Wallet::encryptMessageML(const std::string& message, const std::string& recipient_pubkey) {
 #ifdef HAVE_MLKEM_NATIVE
     // Decode recipient public key from Base64
     auto recipient_key_bytes = fromBase64(recipient_pubkey);
-    if (recipient_key_bytes.size() != 1184) {  // MLKEM768_PUBLICKEYBYTES
-        // A wrong-length key here almost always means the node did not advertise an ML-KEM public key
-        // in its auth `key` field (e.g. a validator predating the PQ-transport build) — give an
-        // actionable message, consistent with the other SDKs' encrypt guards.
+    size_t expected_pk_bytes = (mlkem_parameter_set == 1024) ? 1568 : 1184;
+    if (recipient_key_bytes.size() != expected_pk_bytes) {
         throw std::invalid_argument(
             "KnishIO: cannot ML-KEM-encrypt — recipient public key is " +
             std::to_string(recipient_key_bytes.size()) +
-            " bytes, expected 1184 (ML-KEM-768). The node likely did not advertise an ML-KEM public key "
-            "(upgrade the validator to a PQ-transport build), or authenticate with encrypt=false.");
+            " bytes, expected " + std::to_string(expected_pk_bytes) +
+            " (ML-KEM-" + std::to_string(mlkem_parameter_set) + "). The peer is not running ML-KEM-" +
+            std::to_string(mlkem_parameter_set) + "; upgrade the peer, or step this client back to the other parameter set.");
     }
     
-    // Encapsulate to generate shared secret and ciphertext. Draw the 32-byte KEM message m
-    // from the platform CSPRNG (OpenSSL RAND_bytes, the same source as the AES-GCM IV below)
-    // and use the DERANDOMIZED API. The randomized crypto_kem_enc() is compiled out via
-    // MLK_CONFIG_NO_RANDOMIZED_API, so the mlkem-native test RNG stub can never be linked.
-    std::vector<uint8_t> ciphertext(1088);      // MLKEM768_CIPHERTEXTBYTES
-    std::vector<uint8_t> shared_secret(32);     // MLKEM768_SHAREDSECRETBYTES
-    std::vector<uint8_t> coins(32);             // MLKEM_SYMBYTES: the KEM message m
+    size_t ct_bytes = (mlkem_parameter_set == 1024) ? 1568 : 1088;
+    std::vector<uint8_t> ciphertext(ct_bytes);
+    std::vector<uint8_t> shared_secret(32);
+    std::vector<uint8_t> coins(32);
 
     if (RAND_bytes(coins.data(), static_cast<int>(coins.size())) != 1) {
         sodium_memzero(coins.data(), coins.size());
-        throw std::runtime_error("ML-KEM768 encapsulation RNG failed");
+        throw std::runtime_error("ML-KEM encapsulation RNG failed");
     }
 
-    int result = crypto_kem_enc_derand(
-        ciphertext.data(),
-        shared_secret.data(),
-        recipient_key_bytes.data(),
-        coins.data()
-    );
+    int result = 0;
+    if (mlkem_parameter_set == 1024) {
+        result = mlkem1024_enc_derand(
+            ciphertext.data(),
+            shared_secret.data(),
+            recipient_key_bytes.data(),
+            coins.data()
+        );
+    } else {
+        result = mlkem768_enc_derand(
+            ciphertext.data(),
+            shared_secret.data(),
+            recipient_key_bytes.data(),
+            coins.data()
+        );
+    }
     sodium_memzero(coins.data(), coins.size());
 
     if (result != 0) {
-        throw std::runtime_error("ML-KEM768 encapsulation failed");
+        throw std::runtime_error("ML-KEM encapsulation failed");
     }
 
     // JSON-encode message (cross-SDK compatibility requirement)
-    // Other SDKs (PHP, JavaScript, Kotlin) JSON-encode messages before encryption
     json message_json = message;
     std::string message_json_str = message_json.dump();
 
@@ -394,7 +424,7 @@ std::map<std::string, std::string> Wallet::encryptMessageML768(const std::string
         {"encryptedMessage", encrypted_message}
     };
 #else
-    throw std::runtime_error("ML-KEM768 not available");
+    throw std::runtime_error("ML-KEM not available");
 #endif
 }
 
@@ -408,22 +438,32 @@ std::string Wallet::mlkemDecryptToString(const std::map<std::string, std::string
     auto ciphertext = fromBase64(encrypted_data.at("cipherText"));
     auto encrypted_message = fromBase64(encrypted_data.at("encryptedMessage"));
 
-    if (ciphertext.size() != 1088) {  // MLKEM768_CIPHERTEXTBYTES
-        throw std::invalid_argument("Invalid ML-KEM768 ciphertext size");
+    size_t expected_ct_bytes = (mlkem_parameter_set == 1024) ? 1568 : 1088;
+    if (ciphertext.size() != expected_ct_bytes) {
+        throw std::invalid_argument("Invalid ML-KEM ciphertext size");
     }
 
     // Decapsulate to recover shared secret
-    std::vector<uint8_t> shared_secret(32);  // MLKEM768_SHAREDSECRETBYTES
+    std::vector<uint8_t> shared_secret(32);
 
-    int result = crypto_kem_dec(
-        shared_secret.data(),
-        ciphertext.data(),
-        mlkem_private_key.data()
-    );
+    int result = 0;
+    if (mlkem_parameter_set == 1024) {
+        result = mlkem1024_dec(
+            shared_secret.data(),
+            ciphertext.data(),
+            mlkem_private_key.data()
+        );
+    } else {
+        result = mlkem768_dec(
+            shared_secret.data(),
+            ciphertext.data(),
+            mlkem_private_key.data()
+        );
+    }
 
     if (result != 0) {
         sodium_memzero(shared_secret.data(), shared_secret.size());
-        throw std::runtime_error("ML-KEM768 decapsulation failed");
+        throw std::runtime_error("ML-KEM decapsulation failed");
     }
 
     // Decrypt message with shared secret using AES-256-GCM
@@ -445,20 +485,16 @@ std::string Wallet::mlkemDecryptToString(const std::map<std::string, std::string
 
     return plaintext_json;
 #else
-    throw std::runtime_error("ML-KEM768 not available");
+    throw std::runtime_error("ML-KEM not available");
 #endif
 }
 
-std::string Wallet::decryptMessageML768(const std::map<std::string, std::string>& encrypted_data) {
-    // JSON-decode the raw decrypted plaintext (cross-SDK compatibility: the c136 vector + the
-    // request direction encrypt a JSON *string* value). The PQ-transport RESPONSE path is an
-    // OBJECT and uses the raw helper directly (decryptMyMessageML768).
+std::string Wallet::decryptMessageML(const std::map<std::string, std::string>& encrypted_data) {
     std::string plaintext_json = mlkemDecryptToString(encrypted_data);
     try {
         json parsed = json::parse(plaintext_json);
         return parsed.get<std::string>();
     } catch (const std::exception& e) {
-        // If JSON parsing fails / isn't a string, return raw plaintext (backward compatibility)
         return plaintext_json;
     }
 }
@@ -473,17 +509,14 @@ std::string Wallet::hashShare(const std::string& pubkeyStr) {
 // Post-quantum (ML-KEM768) CipherHash request envelope: a stringified single-recipient map
 // { "<hashShare(recipient_pubkey)>": {cipherText, encryptedMessage} }. Matches the Rust validator's
 // CipherHash handler. PQ-transport Phase E.
-std::string Wallet::encryptStringML768(const std::string& message, const std::string& recipient_pubkey) {
-    auto envelope = encryptMessageML768(message, recipient_pubkey);
+std::string Wallet::encryptStringML(const std::string& message, const std::string& recipient_pubkey) {
+    auto envelope = encryptMessageML(message, recipient_pubkey);
     json map;
-    map[hashShare(recipient_pubkey)] = envelope;  // map<string,string> → JSON object
+    map[hashShare(recipient_pubkey)] = envelope;
     return map.dump();
 }
 
-// Decrypt a CipherHash response map (stringified) addressed to THIS wallet's ML-KEM pubkey
-// (hashShare(base64(mlkem_public_key))) → the RAW inner GraphQL response JSON (NOT json-decoded;
-// it replaces the HTTP response body). Empty string if no entry. PQ-transport Phase E.
-std::string Wallet::decryptMyMessageML768(const std::string& mapJson) {
+std::string Wallet::decryptMyMessageML(const std::string& mapJson) {
     json map = json::parse(mapJson);
     std::string shareKey = hashShare(toBase64(mlkem_public_key));
     if (!map.contains(shareKey)) {
@@ -492,7 +525,6 @@ std::string Wallet::decryptMyMessageML768(const std::string& mapJson) {
     auto envelope = map.at(shareKey).get<std::map<std::string, std::string>>();
     return mlkemDecryptToString(envelope);
 }
-
 // Partition this wallet's tokenUnits across the SENT set (id in `units`) and the KEPT set,
 // mirroring the JS/Rust/Python/C SDK split. Value semantics (no manual ownership): the SENT
 // units stay on this wallet and are copied to recipientWallet (if non-null); the KEPT units

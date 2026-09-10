@@ -66,6 +66,7 @@ public:
         std::chrono::milliseconds timeout{30000};         ///< Request timeout
         int maxRetries = 3;                              ///< Maximum retry attempts
         std::chrono::milliseconds retryDelay{1000};      ///< Delay between retries
+        int mlKemParameterSet = 1024;                     ///< ML-KEM parameter set (1024 default, 768 step-back)
     };
 
     /**
@@ -94,6 +95,7 @@ public:
         Builder& timeout(std::chrono::milliseconds timeout);
         Builder& maxRetries(int retries);
         Builder& retryDelay(std::chrono::milliseconds delay);
+        Builder& mlKemParameterSet(int parameterSet = 1024);
         
         [[nodiscard]] std::unique_ptr<KnishIOClient> build() const;
         

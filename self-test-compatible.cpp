@@ -588,14 +588,15 @@ public:
         // Display summary
         displaySummary();
 
-        // Return success if all tests passed
-        int total_tests = 12;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + ML-KEM768 vector + NaCl vector + negative
+        // Return success if all tests passed (including cross-SDK validation)
+        int total_tests = 13;  // crypto + 3 base + 3 extended + buffer family + ML-KEM768 + ML-KEM768 vector + NaCl vector + negative + cross-SDK
         int passed_tests = (crypto_result ? 1 : 0) + (meta_result ? 1 : 0) +
                           (simple_result ? 1 : 0) + (complex_result ? 1 : 0) +
                           (token_result ? 1 : 0) + (wallet_result ? 1 : 0) + (shadow_result ? 1 : 0) +
                           (buffer_result ? 1 : 0) +
                           (mlkem_result ? 1 : 0) + (mlkem_vector_result ? 1 : 0) +
-                          (nacl_vector_result ? 1 : 0) + (negative_result ? 1 : 0);
+                          (nacl_vector_result ? 1 : 0) + (negative_result ? 1 : 0) +
+                          (cross_sdk_result ? 1 : 0);
 
         return (passed_tests == total_tests);
     }
@@ -1370,8 +1371,7 @@ private:
         try {
             // JavaScript pattern: Create encryption wallet from seed
             auto secret = knishio::KnishIOClient::generateSecret("TESTSEED");
-            Wallet encryption_wallet(secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
-            
+            Wallet encryption_wallet(secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 64, 768);
             Logger::test("Encryption wallet creation", true);
             
             // JavaScript pattern: Check ML-KEM768 public key generation
@@ -1445,7 +1445,7 @@ private:
             const auto& dec = mlkem.at("decrypt");
 
             // --- keygen assertion (mlkem-native is portable) ---
-            Wallet w(kg.at("secret").get<std::string>(), kg.at("token").get<std::string>(), kg.at("position").get<std::string>());
+            Wallet w(kg.at("secret").get<std::string>(), kg.at("token").get<std::string>(), kg.at("position").get<std::string>(), 64, 768);
             std::string pubkey_b64 = toBase64(w.mlkem_public_key);
             bool keygen_ok = (pubkey_b64 == kg.at("expectedPubkey").get<std::string>());
             Logger::test("ML-KEM768 keygen pubkey matches vector", keygen_ok);
@@ -1455,10 +1455,26 @@ private:
                 {"cipherText", dec.at("cipherText").get<std::string>()},
                 {"encryptedMessage", dec.at("encryptedMessage").get<std::string>()}
             };
-            std::string plaintext = w.decryptMessageML768(enc);
+            std::string plaintext = w.decryptMessageML(enc);
             bool decrypt_ok = (plaintext == dec.at("expectedPlaintext").get<std::string>());
             Logger::test("ML-KEM768 frozen sample decrypts to vector plaintext", decrypt_ok);
-            return keygen_ok && decrypt_ok;
+            const auto& mlkem1024 = vectors.at("vectors").at("mlkem1024");
+            const auto& kg1024 = mlkem1024.at("keygen");
+            const auto& dec1024 = mlkem1024.at("decrypt");
+
+            Wallet w1024(kg1024.at("secret").get<std::string>(), kg1024.at("token").get<std::string>(), kg1024.at("position").get<std::string>());
+            std::string pubkey1024_b64 = toBase64(w1024.mlkem_public_key);
+            bool keygen1024_ok = (pubkey1024_b64 == kg1024.at("expectedPubkey").get<std::string>());
+            Logger::test("ML-KEM1024 keygen pubkey matches vector", keygen1024_ok);
+
+            std::map<std::string, std::string> enc1024 = {
+                {"cipherText", dec1024.at("cipherText").get<std::string>()},
+                {"encryptedMessage", dec1024.at("encryptedMessage").get<std::string>()}
+            };
+            std::string plaintext1024 = w1024.decryptMessageML(enc1024);
+            bool decrypt1024_ok = (plaintext1024 == dec1024.at("expectedPlaintext").get<std::string>());
+            Logger::test("ML-KEM1024 frozen sample decrypts to vector plaintext", decrypt1024_ok);
+            return keygen_ok && decrypt_ok && keygen1024_ok && decrypt1024_ok;
         } catch (const std::exception& e) {
             std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
             return false;
@@ -1760,7 +1776,7 @@ private:
                                 mlkem_data.contains("originalPlaintext")) {
                                 // OpenSSL EVP AES-256-GCM is portable (no AES-NI gate) → always runs.
                                 auto our_secret = knishio::KnishIOClient::generateSecret("TESTSEED");
-                                Wallet our_wallet(our_secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+                                Wallet our_wallet(our_secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 64, 768);
                                 try {
                                     std::map<std::string, std::string> enc = {
                                         {"cipherText", mlkem_data["encryptedData"]["cipherText"].get<std::string>()},
@@ -1833,8 +1849,7 @@ private:
     bool saveResults() {
         // Configurable shared results directory for cross-platform testing
         const char* shared_results_env = std::getenv("KNISHIO_SHARED_RESULTS");
-        std::string shared_dir = shared_results_env ? shared_results_env : "../../shared-test-results";
-        
+        std::string shared_dir = shared_results_env ? shared_results_env : "../shared-test-results";
         // Ensure directory exists
         std::filesystem::create_directories(shared_dir);
         

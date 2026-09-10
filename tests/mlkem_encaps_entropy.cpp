@@ -37,7 +37,7 @@ int main() {
 
     const std::string pubkey_b64 = toBase64(wallet.mlkem_public_key);
     std::map<std::string, std::string> envelope =
-        wallet.encryptMessageML768("entropy-probe", pubkey_b64);
+        wallet.encryptMessageML("entropy-probe", pubkey_b64);
 
     const std::string& cipher_text = envelope["cipherText"];
     if (cipher_text.empty()) {
