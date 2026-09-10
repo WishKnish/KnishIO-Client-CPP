@@ -91,6 +91,33 @@ set_tests_properties(MlkemEncapsEntropy PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:mlkem_encaps_entropy>
 )
 
+# A 1024-default build must still READ pre-bump ML-KEM-768 records (dual-identity inbound
+# decryption, both hash shares on the map-addressed path) and must still validate a frozen
+# pre-bump signed 768 auth molecule. Fixture path is baked in so the test does not depend on
+# the working directory; KNISHIO_CROSS_PLATFORM_VECTORS still overrides it.
+add_executable(legacy_mlkem768_compat legacy_mlkem768_compat.cpp)
+target_link_libraries(legacy_mlkem768_compat
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(legacy_mlkem768_compat PRIVATE cxx_std_20)
+target_compile_definitions(legacy_mlkem768_compat PRIVATE
+    KNISHIO_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross-platform-test-vectors.json"
+)
+set_target_properties(legacy_mlkem768_compat PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME LegacyMlkem768Compat
+    COMMAND legacy_mlkem768_compat
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(LegacyMlkem768Compat PROPERTIES
+    LABELS "crypto;pq;compatibility;vectors"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:legacy_mlkem768_compat>
+)
+
 # Unit tests (if we add them later)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/unit_tests.cpp")
     add_executable(unit_tests unit_tests.cpp)

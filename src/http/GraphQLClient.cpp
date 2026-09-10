@@ -409,7 +409,7 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
 
     // PQ-transport Phase E: decrypt the CipherHash response envelope back to the inner GraphQL
     // response JSON (which replaces the body for normal parsing). The validator encrypts the
-    // response OBJECT, so decryptMyMessageML768 returns the raw inner JSON (no JSON-decode).
+    // response OBJECT, so decryptMyMessageML returns the raw inner JSON (no JSON-decode).
     if (encryptedRequest && pImpl_->cipherWallet) {
         try {
             nlohmann::json env = nlohmann::json::parse(response.body);

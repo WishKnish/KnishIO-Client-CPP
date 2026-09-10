@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # Project definition
 project(KnishIOClientCPP
-    VERSION 0.9.4
+    VERSION 1.0.0
     DESCRIPTION "KnishIO DLT Client SDK for C++"
     HOMEPAGE_URL "https://github.com/knishio"
     LANGUAGES CXX C  # Enable C for mlkem-native integration
@@ -70,7 +70,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/third_party)
 
-# mlkem-native include directories for ML-KEM768 JavaScript compatibility
+# mlkem-native include directories for ML-KEM (both parameter sets) JavaScript compatibility
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/mlkem-native/mlkem/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/mlkem-native/mlkem)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/mlkem-native/test)

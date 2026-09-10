@@ -1,4 +1,4 @@
-// Live ML-KEM768 CipherHash encrypted-transport round-trip against a running validator
+// Live ML-KEM CipherHash encrypted-transport round-trip against a running validator
 // (PQ-transport Phase E, cycle 168 — C++).
 //
 // End-to-end: the client authenticates (conveying its AUTH source wallet's ML-KEM public key via a

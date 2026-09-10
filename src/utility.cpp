@@ -231,7 +231,7 @@ std::wstring fromUtf8(const std::string &str)
 }
 
 // =============================================================================
-// BASE64 UTILITIES (ML-KEM768 JavaScript Compatibility)
+// BASE64 UTILITIES (ML-KEM JavaScript Compatibility)
 // =============================================================================
 
 std::string toBase64(const std::vector<uint8_t> &data) {

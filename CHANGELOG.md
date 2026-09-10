@@ -14,6 +14,72 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [1.0.0] — 2026-09-10
+
+### Added
+
+- A wallet now decrypts records addressed to **its own ML-KEM-768 identity even when configured at
+  ML-KEM-1024**, by deriving that identity on demand from the same 64-byte wallet seed. The seed is
+  parameter-set-independent, so both identities belong to one wallet; only the final
+  `keypair_derand` call differs. Reading pre-bump 768 records therefore needs no configuration
+  change and no second wallet. `Wallet::mlkemDecryptToString()` dispatches on the decoded
+  ciphertext's length (1088 → ML-KEM-768, 1568 → ML-KEM-1024) and the derived private key is
+  zeroized when it leaves the decrypting scope — it is never cached on the wallet.
+- `Wallet::decryptMyMessageML()` tries both identities' `CipherHash` map keys, so a `CipherHash`
+  envelope a pre-bump peer addressed to `hashShare(our_768_pubkey)` is found rather than missed.
+
+  Encapsulation and the advertised public key are unchanged and remain single-set: inbound is
+  permissive, outbound is strict. Reading a 768 record you own downgrades nothing — its
+  confidentiality was fixed at 768 by the sender — whereas permissive outbound would be a real
+  downgrade vector.
+
+### Changed
+
+- **ML-KEM-1024 is the default parameter set** for the post-quantum transport, replacing
+  ML-KEM-768. `Wallet`'s fifth constructor argument (`mlkemParameterSet`) and
+  `KnishIOClient::Builder::mlKemParameterSet()` select it (`1024` default, `768` step-back).
+- `Wallet::encryptMessageML()` is strict and **throws** `std::invalid_argument` on a wrong-length
+  recipient key rather than silently downgrading to whatever the peer advertised.
+
+### Removed
+
+- The four backward-compatibility shims on `Wallet`: `encryptMessageML768()`,
+  `decryptMessageML768()`, `encryptStringML768()` and `decryptMyMessageML768()`. Use
+  `encryptMessageML()`, `decryptMessageML()`, `encryptStringML()` and `decryptMyMessageML()`. No
+  aliases are retained.
+
+### Fixed
+
+- The self-test's cross-SDK validation result is counted in the exit-code tally. `total_tests` was
+  12 while the tally summed eleven booleans, so the binary printed success and exited 0 even when
+  every peer molecule failed to validate or decrypt.
+- The self-test's default shared-results directory is `../shared-test-results`, one level lower
+  than the previous `../../shared-test-results`, so it now matches the SDK-root-relative
+  convention the fixture lookups in the same file already use. The orchestrated cross-SDK run
+  overrides this with `KNISHIO_SHARED_RESULTS` and is unaffected either way; the default matters
+  only for a standalone run, which resolves it against the process working directory.
+- `Wallet::mlkemDecryptToString()` verifies the length of the ML-KEM private key before
+  decapsulating. `mlkem768_dec`/`mlkem1024_dec` read 2,400/3,168 bytes from the pointer they are
+  given, and the secret key was passed unchecked, so a wallet constructed without a secret — which
+  leaves the key vector empty — caused an out-of-bounds read off a zero-length buffer rather than a
+  clean failure. Both the configured-parameter-set path (pre-existing) and the new sibling-identity
+  path now throw `std::invalid_argument` instead.
+
+### Notes
+
+- The ML-KEM-1024 cutover is a breaking API change, so it takes the 1.0.0 line.
+- **Session-snapshot parameter-set persistence does not apply to this SDK.** The sibling SDKs gained
+  it in this release; C++ has no `AuthToken` at all — `class AuthToken;` is forward-declared in
+  `src/KnishIOClient.h` and never defined, and `KnishIOClient` holds the JWT as
+  `std::optional<std::string>`. There is no snapshot to carry a parameter set.
+- A frozen pre-bump ML-KEM-768 auth molecule (`vectors.legacyMlkem768AuthMolecule` in
+  `cross-platform-test-vectors.json`) is validated by this SDK from a 1024-default build
+  (`tests/legacy_mlkem768_compat.cpp`, CTest `LegacyMlkem768Compat`), so the compatibility claim
+  rests on a signed artifact rather than on parameter-set-independent hashing. That leg covers
+  `Molecule::verify()` — molecular hash plus isotope-V conservation. `Molecule::verify()`
+  deliberately does not call `verifyOts()`, which needs the sender's wallet and is not wired in;
+  this release does not change that.
+
 ## [0.9.4] — 2026-08-17
 
 ### Security
@@ -151,7 +217,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/0.9.4...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.0.0...HEAD
+[1.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.0.0
 [0.9.4]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/0.9.4
 [0.9.3]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/0.9.3
 [0.9.2]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/0.9.2

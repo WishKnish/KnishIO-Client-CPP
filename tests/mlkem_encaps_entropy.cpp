@@ -1,10 +1,10 @@
 /**
  * @file mlkem_encaps_entropy.cpp
- * @brief Prove-the-gate harness for ML-KEM-768 encapsulation randomness (mirror of the C harness).
+ * @brief Prove-the-gate harness for ML-KEM encapsulation randomness (mirror of the C harness).
  *
- * Builds a FIXED ML-KEM-768 keypair from a constant wallet secret, performs ONE encapsulation
- * to that key via Wallet::encryptMessageML768, and prints the KEM ciphertext (the map's
- * "cipherText" field) to stdout.
+ * Builds a FIXED ML-KEM keypair at the wallet's default parameter set from a constant wallet
+ * secret, performs ONE encapsulation to that key via Wallet::encryptMessageML, and prints the
+ * KEM ciphertext (the map's "cipherText" field) to stdout.
  *
  * Rationale: ML-KEM derandomizes K-PKE (r = G(m || H(ek))), so the ONLY entropy in the KEM
  * ciphertext is the 32-byte message m. A CSPRNG-backed build prints a DIFFERENT cipherText on

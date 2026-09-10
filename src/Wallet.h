@@ -28,21 +28,30 @@ public:
 	std::string decryptMyMessageML(const std::string& mapJson);
 	std::string mlkemDecryptToString(const std::map<std::string, std::string>& encrypted_data);
 
-	// Backward compatibility shims
-	std::map<std::string, std::string> encryptMessageML768(const std::string& message, const std::string& recipient_pubkey) {
-		return encryptMessageML(message, recipient_pubkey);
-	}
-	std::string decryptMessageML768(const std::map<std::string, std::string>& encrypted_data) {
-		return decryptMessageML(encrypted_data);
-	}
-	std::string encryptStringML768(const std::string& message, const std::string& recipient_pubkey) {
-		return encryptStringML(message, recipient_pubkey);
-	}
-	std::string decryptMyMessageML768(const std::string& mapJson) {
-		return decryptMyMessageML(mapJson);
-	}
 private:
-	// AES-256-GCM helper methods for ML-KEM768 message encryption
+	// A derived ML-KEM identity. The 64-byte d‖z seed this wallet's key produces takes no
+	// parameter-set input, so BOTH the ML-KEM-768 and the ML-KEM-1024 identity are derivable
+	// from material the wallet already holds. The private key is zeroized when the value
+	// leaves scope — a derived key is never cached on the wallet.
+	struct MlKemIdentity
+	{
+		std::vector<uint8_t> publicKey;
+		std::vector<uint8_t> privateKey;
+		int parameterSet = 0;
+
+		MlKemIdentity() = default;
+		MlKemIdentity(const MlKemIdentity&) = delete;
+		MlKemIdentity& operator=(const MlKemIdentity&) = delete;
+		MlKemIdentity(MlKemIdentity&&) noexcept = default;
+		~MlKemIdentity();
+	};
+
+	// Derives a keypair at an arbitrary parameter set (768 or 1024) WITHOUT mutating the wallet.
+	// initializeMLKEM() calls it with the configured set; inbound decryption calls it with the
+	// other set when a ciphertext or hash share belongs to this wallet's other identity.
+	MlKemIdentity deriveMlKemKeypair(int parameterSet) const;
+
+	// AES-256-GCM helper methods for ML-KEM message encryption
 	std::vector<uint8_t> encryptWithSharedSecret(const std::vector<uint8_t>& message, const std::vector<uint8_t>& shared_secret);
 	std::vector<uint8_t> decryptWithSharedSecret(const std::vector<uint8_t>& encrypted_message, const std::vector<uint8_t>& shared_secret);
 
@@ -76,7 +85,7 @@ public:
 	std::vector<unsigned char> privkey;
 	std::vector<unsigned char> pubkey;
 
-	// ML-KEM768 post-quantum cryptography keys (JavaScript SDK compatibility)
+	// ML-KEM post-quantum cryptography keys (JavaScript SDK compatibility)
 	std::vector<uint8_t> mlkem_public_key;
 	std::vector<uint8_t> mlkem_private_key;
 	int mlkem_parameter_set = 1024;

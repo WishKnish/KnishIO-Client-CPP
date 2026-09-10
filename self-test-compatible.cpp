@@ -124,7 +124,7 @@ struct TestResults {
     std::string sdk = "C++";
     // Keep in step with project(VERSION) in CMakeLists.txt — the gauntlet's snapshot
     // coherence gate fails an SDK whose reported version disagrees with its manifest.
-    std::string version = "0.9.4";
+    std::string version = "1.0.0";
     std::string timestamp;
     CryptoTestResult crypto;
     MoleculeTestResult meta_creation;
@@ -1383,13 +1383,13 @@ private:
 
             // JavaScript pattern: Test self-encryption
             auto public_key_b64 = toBase64(encryption_wallet.mlkem_public_key);
-            auto encrypted_data = encryption_wallet.encryptMessageML768("Hello ML-KEM768 cross-platform test message!", public_key_b64);
+            auto encrypted_data = encryption_wallet.encryptMessageML("Hello ML-KEM768 cross-platform test message!", public_key_b64);
             
             bool encryption_success = !encrypted_data["cipherText"].empty() && !encrypted_data["encryptedMessage"].empty();
             Logger::test("Message encryption (self-encryption)", encryption_success);
             
             // JavaScript pattern: Test decryption and verification
-            auto decrypted_message = encryption_wallet.decryptMessageML768(encrypted_data);
+            auto decrypted_message = encryption_wallet.decryptMessageML(encrypted_data);
             bool decryption_success = (decrypted_message == "Hello ML-KEM768 cross-platform test message!");
             Logger::test("Message decryption and verification", decryption_success);
             
@@ -1782,7 +1782,7 @@ private:
                                         {"cipherText", mlkem_data["encryptedData"]["cipherText"].get<std::string>()},
                                         {"encryptedMessage", mlkem_data["encryptedData"]["encryptedMessage"].get<std::string>()}
                                     };
-                                    std::string decrypted = our_wallet.decryptMessageML768(enc);
+                                    std::string decrypted = our_wallet.decryptMessageML(enc);
                                     bool decryption_success = (decrypted == mlkem_data["originalPlaintext"].get<std::string>());
 
                                     if (decryption_success) {
