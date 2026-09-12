@@ -130,6 +130,9 @@ set(KNISHIO_SOURCES
     src/mutation/Mutation.cpp
     src/third_party/BigInt/bigInt.cpp
     src/third_party/Keccak/Keccak-readable-and-compact.cpp
+    src/storage/StorageBackend.cpp
+    src/storage/SecretEnvelope.cpp
+    src/storage/SecretStorageProvider.cpp
     ${MLKEM_NATIVE_SOURCES}
 )
 
@@ -152,6 +155,16 @@ set(KNISHIO_HEADERS
     src/third_party/BigInt/bigInt.h
     src/third_party/Keccak/Keccak.h
     src/third_party/nlohmann/json.hpp
+    src/storage/SecretStorageException.h
+    src/storage/SecureMemory.h
+    src/storage/StorageBackend.h
+    src/storage/SecretEnvelope.h
+    src/storage/SecretStorageProvider.h
+    include/storage/SecretStorageException.h
+    include/storage/SecureMemory.h
+    include/storage/StorageBackend.h
+    include/storage/SecretEnvelope.h
+    include/storage/SecretStorageProvider.h
 )
 
 # Create the main library (SHARED — the VERSION/SOVERSION properties below imply a .dylib;

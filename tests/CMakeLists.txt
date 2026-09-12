@@ -118,6 +118,43 @@ set_tests_properties(LegacyMlkem768Compat PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:legacy_mlkem768_compat>
 )
 
+# Secret Storage envelope encryption tests
+add_executable(test_secret_storage test_secret_storage.cpp)
+target_link_libraries(test_secret_storage
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+    PRIVATE OpenSSL::Crypto
+    PRIVATE PkgConfig::SODIUM
+)
+target_compile_features(test_secret_storage PRIVATE cxx_std_20)
+target_compile_definitions(test_secret_storage PRIVATE
+    KNISHIO_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross-platform-test-vectors.json"
+)
+set_target_properties(test_secret_storage PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME SecretStorage
+    COMMAND test_secret_storage
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(SecretStorage PROPERTIES
+    LABELS "crypto;storage;envelope;vectors"
+    TIMEOUT 60
+    REQUIRED_FILES $<TARGET_FILE:test_secret_storage>
+)
+add_executable(secret_storage_cli secret_storage_cli.cpp)
+target_link_libraries(secret_storage_cli
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+    PRIVATE OpenSSL::Crypto
+    PRIVATE PkgConfig::SODIUM
+)
+target_compile_features(secret_storage_cli PRIVATE cxx_std_20)
+set_target_properties(secret_storage_cli PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+
 # Unit tests (if we add them later)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/unit_tests.cpp")
     add_executable(unit_tests unit_tests.cpp)

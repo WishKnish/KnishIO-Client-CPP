@@ -14,6 +14,24 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [Unreleased]
+
+### Added
+
+- **Hardware-compatible envelope secret storage layer** (`knishio::storage`, `KnishIO::storage`) adhering to the cross-SDK envelope specification:
+  - `SecretEnvelope`: AES-256-GCM authenticated encryption with PBKDF2-HMAC-SHA256 key derivation (100,000 iterations, 16-byte random salt, 12-byte random IV, 16-byte authentication tag appended to ciphertext, standard padded Base64 encoding).
+  - Cross-SDK `SecretStorageMetadata` wire format with required camelCase keys (`bundleHash`, `createdAt`, `hardwareBacked`, `providerType`) and optional `label` (omitted when empty, never null). Deserialization tolerates legacy `snake_case` keys for backwards compatibility.
+  - `SecretStorageProvider` interface with `AesGcmSecretStorageProvider` (software envelope encryption) and `MemorySecretStorageProvider` (in-memory provider for testing).
+  - `StorageBackend` pluggable persistence interface with `MemoryStorageBackend` and `FileStorageBackend` (atomic write via temporary file + rename, 0600 restrictive file permissions).
+  - `SecureMemory`: RAII wrappers (`SecureBytes`, `SecureString`), scoped helpers (`withSecureBytes`, `withSecureString`), buffer zeroization (`zeroizeBytes`, `zeroizeString`), and constant-time comparisons (`constantTimeEquals`).
+  - `SecretStorageException` with typed factory methods (`notFound`, `decryptionFailed`, `unavailable`).
+  - Comprehensive unit and cross-platform vector test suite (`test_secret_storage`) verifying frozen TypeScript envelope decryption (`cross-sdk-pass` -> `MASTER-SECRET-CROSS-SDK-PROBE`), camelCase metadata key enforcement, round trip, wrong passphrase rejection, and corruption detection.
+  - Secret recovery contract support (`RECOVERY_KEY_PREFIX = "knishio:recovery:"`):
+    - Extended `StorageOptions` with `recoveryPassphrase` (`std::optional<std::string>`) and `allowUnrecoverable` (`bool`, default `false`).
+    - Added `recoverSecret(bundleHash, recoveryPassphrase, options)` to `SecretStorageProvider` interface.
+    - In `AesGcmSecretStorageProvider` and `MemorySecretStorageProvider`: dual-sealing of secondary recovery envelope under `recoveryPassphrase` (`providerType: "aes-gcm"`, `hardwareBacked: false`) to `knishio:recovery:<bundleHash>`, atomic deletion of both primary and recovery keys in `deleteSecret`, exclusion of recovery keys from `listSecrets()`, and zero-leak re-enrollment in `recoverSecret()`.
+    - Comprehensive recovery unit tests in `test_secret_storage` covering primary/recovery storage, list filtering, primary loss simulation, fail-closed bad-passphrase rejection, byte-identical restoration under fresh ciphertext, and cascade deletion.
+
 ## [1.0.0] — 2026-09-10
 
 ### Added
