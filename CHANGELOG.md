@@ -14,7 +14,7 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
-## [Unreleased]
+## [1.1.0] — 2026-09-12
 
 ### Added
 
@@ -235,7 +235,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.0.0...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.1.0...HEAD
+[1.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.1.0
 [1.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.0.0
 [0.9.4]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/0.9.4
 [0.9.3]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/0.9.3
