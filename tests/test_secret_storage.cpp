@@ -133,6 +133,60 @@ int main() {
     }
 
     // =========================================================================
+    // 2b. Cross-Platform Recovery Vector Re-enrolment
+    // =========================================================================
+    std::cout << "\n[2b] Cross-Platform Recovery Vector Re-enrolment" << std::endl;
+    try {
+        const auto& testVector = vectors.at("vectors").at("secret_storage_envelope").at("tests").at(1);
+        const auto storageKey = testVector.at("storageKey").get<std::string>();
+        const auto bundleHash = testVector.at("bundleHash").get<std::string>();
+        const auto recoveryPassphrase = testVector.at("recoveryPassphrase").get<std::string>();
+        const auto expectedPlaintext = testVector.at("expectedPlaintext").get<std::string>();
+        const auto payloadJson = testVector.at("payload");
+
+        auto backend = std::make_shared<MemoryStorageBackend>();
+        backend->setItem(storageKey, payloadJson.dump());
+
+        const std::string secretKey = "knishio:secret:" + bundleHash;
+        check(!backend->getItem(secretKey).has_value(), "Primary initially absent before recovery");
+
+        AesGcmSecretStorageProvider provider(backend);
+        const std::string primaryPassphrase = "xsdk-reenrolled-primary-pass";
+        provider.recoverSecret(bundleHash, recoveryPassphrase, StorageOptions::withPassphrase(primaryPassphrase));
+
+        auto got = provider.retrieveSecret(bundleHash, StorageOptions::withPassphrase(primaryPassphrase));
+        check(got.has_value() && *got == expectedPlaintext,
+              "Retrieved plaintext matches expectedPlaintext after recovery",
+              got.has_value() ? *got : "(none)");
+
+        auto secretRaw = backend->getItem(secretKey);
+        auto recRaw = backend->getItem(storageKey);
+        check(secretRaw.has_value(), "Primary envelope present after recovery");
+        check(recRaw.has_value(), "Recovery envelope present after recovery");
+
+        if (secretRaw.has_value()) {
+            json storedJson = json::parse(*secretRaw);
+            check(storedJson.contains("metadata"), "Stored envelope contains metadata");
+            if (storedJson.contains("metadata")) {
+                const auto& meta = storedJson.at("metadata");
+                check(meta.at("hardwareBacked").get<bool>() == false, "hardwareBacked is false");
+
+                for (const auto& req : testVector.at("requiredMetadataKeys")) {
+                    const auto key = req.get<std::string>();
+                    check(meta.contains(key), "Emitted metadata contains required key: " + key);
+                }
+
+                for (const auto& forb : testVector.at("forbiddenMetadataKeys")) {
+                    const auto key = forb.get<std::string>();
+                    check(!meta.contains(key), "Emitted metadata excludes forbidden key: " + key);
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        check(false, "Cross-platform recovery vector re-enrolment", e.what());
+    }
+
+    // =========================================================================
     // 3. Emitted Metadata Keys Contract
     // =========================================================================
     std::cout << "\n[3] Metadata Keys Contract (camelCase wire format)" << std::endl;
