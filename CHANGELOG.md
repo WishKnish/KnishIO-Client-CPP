@@ -14,6 +14,26 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [1.2.0] — 2026-09-20
+
+### Added
+
+- `http::EncryptedTransportException` (derives `GraphQLException`) in
+  `include/http/GraphQLClient.h`.
+
+### Changed
+
+- `http::GraphQLClient` **fails closed**: `EncryptedTransportException("Authorized wallet
+  missing.")` / `("Server public key missing.")` instead of sending the request in plaintext, with
+  the bypass set decided first. The retry loop and `KnishIOClient` rethrow it immediately — no
+  amount of retrying supplies a missing key.
+
+### Notes
+
+- Both live CipherHash cases (`tests/cipherhash_live_test.cpp`) passed against
+  `testnet.knish.io` on 2026-09-20 at ML-KEM-1024 and ML-KEM-768, including the validator
+  refusing a plaintext query from an `encrypt=true` session.
+
 ## [1.1.0] — 2026-09-12
 
 ### Added
@@ -235,7 +255,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.1.0...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.0...HEAD
+[1.2.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.0
 [1.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.1.0
 [1.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.0.0
 [0.9.4]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/0.9.4
