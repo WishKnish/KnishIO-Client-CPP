@@ -252,6 +252,10 @@ GraphQLClient::Response GraphQLClient::executeWithRetry(const Request& request) 
                 return lastResponse;
             }
             
+        } catch (const EncryptedTransportException&) {
+            // Fail closed: the transport keys are missing, so the request never reached the
+            // network and never will. Surface it now instead of burning the backoff budget.
+            throw;
         } catch (const std::exception& e) {
             lastResponse.error = e.what();
             lastResponse.statusCode = 0;
@@ -347,10 +351,23 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     // Set POST data — PQ-transport Phase E: wrap in the ML-KEM CipherHash envelope when encryption
     // is enabled and the operation isn't bypassed (the validator decrypts it). Encrypt the FULL
     // body string (the validator recovers it as a JSON string value → parses the inner request).
+    // Decide the bypass FIRST, then demand the keys: a bypassed operation (`__schema`, `ContinuId`,
+    // `AccessToken`, U-isotope `ProposeMolecule`) must still go out in plaintext or the auth
+    // bootstrap would deadlock encrypting to a server pubkey it has not learned yet. Anything else
+    // on an encryption-enabled client fails closed rather than silently downgrading to plaintext
+    // (matches PHP Cipher.php / Kotlin HttpClient).
     bool encryptedRequest = false;
     std::string postData;
-    if (pImpl_->cipherEnabled && pImpl_->cipherWallet && pImpl_->serverPubKey.has_value()
-        && shouldEncryptRequest(request)) {
+    if (pImpl_->cipherEnabled && shouldEncryptRequest(request)) {
+        if (!pImpl_->cipherWallet) {
+            throw EncryptedTransportException("Authorized wallet missing.");
+        }
+        // An empty advertised key counts as missing (parity with JS/TS `!serverPubkey`); it is
+        // also the only way this branch is reachable through the public setCipherContext, which
+        // always populates the optional.
+        if (!pImpl_->serverPubKey.has_value() || pImpl_->serverPubKey->empty()) {
+            throw EncryptedTransportException("Server public key missing.");
+        }
         std::string envelope = pImpl_->cipherWallet->encryptStringML(
             request.toJsonString(), pImpl_->serverPubKey.value());
         Request wrapped;

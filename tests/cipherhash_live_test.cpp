@@ -15,6 +15,7 @@
 #include <string>
 
 #include "KnishIOClient.h"
+#include "http/GraphQLClient.h"
 #include "response/Response.h"
 
 int main() {
@@ -37,15 +38,21 @@ int main() {
             .mlKemParameterSet(param)
             .build();
 
-        // ONE authenticated session (encrypt=true → conveys the AUTH wallet's ML-KEM pubkey as a
-        // signed walletPubkey U-atom meta, so the validator can encrypt responses back to it). We
-        // vary ONLY the transport on this SAME session — the queried balance wallet stays fixed.
-        // (A fresh second auth would rotate the USER remainder via ContinuID → a different address/
-        // position: correct protocol behaviour, NOT a transport bug.)
-        client->requestAuthToken(secret, std::optional<std::string>("public"), true).get();
+        // ONE session, transport toggled on it — the queried balance wallet stays fixed. (A fresh
+        // second auth would rotate the USER remainder via ContinuID → a different address/position:
+        // correct protocol behaviour, NOT a transport bug.)
+        //
+        // The session authenticates PLAINTEXT on purpose. The AUTH wallet's ML-KEM pubkey is
+        // conveyed as a signed walletPubkey U-atom meta regardless of `encrypt`, and the cipher
+        // context is plumbed either way (KnishIOClient.cpp:925-929), so a plaintext-authenticated
+        // session still speaks the encrypted transport. Authenticating with encrypt=true instead
+        // would make the plaintext baseline leg below a silent downgrade, which the validator
+        // rejects when ENFORCE_ENCRYPTED_TRANSPORT is at its secure default.
+        client->requestAuthToken(secret, std::optional<std::string>("public"), false).get();
 
         // Encrypted round-trip: the validator ML-KEM-decrypts the request, executes it, and encrypts
         // the response back to the client's ML-KEM pubkey; the client decrypts it.
+        client->switchEncryption(true);
         auto encResp = client->queryBalance("USER").get();
 
         // Plaintext baseline of the SAME wallet on the SAME authed session — only transport differs.
@@ -88,6 +95,50 @@ int main() {
 
         std::cout << "PASS: encrypted queryBalance round-trips (matches plaintext); address="
                   << enc->address << "\n";
+
+        // Scenario 2 — live coverage of the enforcement path: extract_encrypt_flag →
+        // auth_tokens.encrypted → requires_encrypted_transport. A session that authenticated with
+        // encrypt=true must NOT be able to fall back to plaintext. This also proves this SDK's
+        // signed `encrypt` meta literal is the one the validator honours.
+        const std::string secret2 = knishio::KnishIOClient::generateSecret(2048);
+        auto client2 = knishio::KnishIOClient::Builder()
+            .uris({url})
+            .timeout(std::chrono::milliseconds(15000))
+            .mlKemParameterSet(param)
+            .build();
+        auto auth = client2->requestAuthToken(secret2, std::optional<std::string>("public"), true).get();
+        if (!auth || auth->getAuthToken().empty()) {
+            std::cerr << "FAIL: encrypt=true authentication returned no token\n";
+            return 1;
+        }
+
+        // The encrypted transport still works for this session.
+        auto encOnly = client2->queryBalance("USER").get();
+        if (!encOnly || !encOnly->getBalance().has_value()) {
+            std::cerr << "FAIL: encrypt=true session could not complete an encrypted query\n";
+            return 1;
+        }
+
+        // Dropping to plaintext must be refused. Read the refusal from the RAW GraphQL response:
+        // queryBalance routes through resolveTokenWallet, which reports any GraphQL error as
+        // "not found" and so cannot distinguish a refusal from an absent balance.
+        knishio::http::GraphQLClient raw(url, 15000, 0);   // cipherEnabled defaults false → plaintext
+        raw.setAuthToken(auth->getAuthToken());
+        knishio::http::GraphQLClient::Request plainReq;
+        plainReq.query = "query { Balance(token: \"USER\") { address } }";
+        auto body = raw.execute(plainReq).get().toJson();
+        const bool refused =
+            body.contains("errors") && body["errors"].is_array() && !body["errors"].empty()
+            && body["errors"][0].contains("message")
+            && body["errors"][0]["message"].get<std::string>()
+                   .find("CipherHash encrypted transport") != std::string::npos;
+        if (!refused) {
+            std::cerr << "FAIL: plaintext request from an encrypt=true session was not refused\n"
+                      << "  body=" << body.dump() << "\n";
+            return 1;
+        }
+
+        std::cout << "PASS: an encrypt=true session is refused when it drops to plaintext\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "FAIL: exception: " << e.what() << "\n";

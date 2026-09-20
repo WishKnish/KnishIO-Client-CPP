@@ -456,6 +456,10 @@ KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& 
                 info.tokenUnits = parseWalletTokenUnits(bal);  // stackable units (forward-compat)
             }
         }
+    } catch (const http::EncryptedTransportException&) {
+        // Fail closed must stay loud: swallowing it here would turn "we refused to send this in
+        // the clear" into an empty, successful-looking ResponseBalance at the public API.
+        throw;
     } catch (const std::exception&) {
         // fall through: found stays false
     }

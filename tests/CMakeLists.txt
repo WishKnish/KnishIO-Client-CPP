@@ -68,6 +68,29 @@ set_tests_properties(CipherHashLive PROPERTIES
     TIMEOUT 60
 )
 
+# PQ-transport (Phase E): an encryption-enabled client must fail CLOSED when the ML-KEM transport
+# keys are missing, while still letting the (unencryptable) auth-bootstrap operations through.
+# No validator needed — the URI is a closed loopback port.
+add_executable(encrypted_transport_fail_closed encrypted_transport_fail_closed.cpp)
+target_link_libraries(encrypted_transport_fail_closed
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(encrypted_transport_fail_closed PRIVATE cxx_std_20)
+set_target_properties(encrypted_transport_fail_closed PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME EncryptedTransportFailClosed
+    COMMAND encrypted_transport_fail_closed
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(EncryptedTransportFailClosed PROPERTIES
+    LABELS "pq-transport;security;unit"
+    TIMEOUT 60
+    REQUIRED_FILES $<TARGET_FILE:encrypted_transport_fail_closed>
+)
+
 # Prove-the-gate: ML-KEM encapsulation must draw its message m from a fresh CSPRNG,
 # not the mlkem-native test RNG stub. Cross-process determinism = the bug.
 # See run_encaps_entropy_twice.cmake.

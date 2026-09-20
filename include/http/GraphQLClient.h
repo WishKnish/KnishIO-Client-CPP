@@ -231,5 +231,17 @@ private:
     std::optional<int> httpStatus_;
 };
 
+/**
+ * Thrown when an encryption-enabled client is asked to send a non-bypassed operation but the
+ * ML-KEM transport keys are missing (PQ-transport Phase E fail-closed). Distinct from
+ * GraphQLException so the retry loop can surface it immediately: no amount of retrying supplies
+ * a wallet or a validator public key, and the request never reaches the network.
+ */
+class EncryptedTransportException : public GraphQLException {
+public:
+    explicit EncryptedTransportException(const std::string& message)
+        : GraphQLException(message) {}
+};
+
 } // namespace http
 } // namespace knishio
