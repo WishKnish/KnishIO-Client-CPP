@@ -268,6 +268,9 @@ int main() {
     //     ceil(1368/7) = 196 -> 7 chunks (196*6 + 192). std::round(1368/7.0) = 195 -> 8 chunks,
     //     and the assignment loop then writes atoms[7] on a 7-atom molecule: an out-of-bounds
     //     write, not merely a parity break. 7 atoms = V source + 5 V recipients + V remainder.
+    //     Three assertions pin it together: every atom non-empty (no FEWER chunks than atoms),
+    //     the fragments reassembling all 1368 chars (no MORE chunks than atoms), and the exact
+    //     [196 x6, 192] split (the JS Math.ceil per-atom boundaries, which are wire format).
     try {
         const std::string secret = knishio::KnishIOClient::generateSecret("wots-ceil-chunking-seed");
         const std::string token = "USER";
@@ -295,8 +298,13 @@ int main() {
         for (const auto& atom : molecule.atoms) {
             allChunked = allChunked && !atom.otsFragment.empty();
         }
-        check(allChunked, "every one of the 7 atoms receives an OTS chunk (chunks == atoms)",
+        check(allChunked, "every one of the 7 atoms receives a non-empty OTS chunk",
               "lengths " + fragmentLengths(molecule));
+        // More chunks than atoms is invisible from the atoms themselves (the extra chunk lands past
+        // the end), so assert the fragments still reassemble the whole signature.
+        check(joinFragments(molecule).size() == 1368,
+              "the 7 fragments reassemble the full 1368-char signature (no chunk written past the last atom)",
+              "reassembled " + std::to_string(joinFragments(molecule).size()) + " of 1368 chars");
         check(fragmentLengths(molecule) == "[196,196,196,196,196,196,192]",
               "ceil chunking gives [196 x6, 192], not round()'s 8 chunks of 195",
               "lengths " + fragmentLengths(molecule) + ", total " +

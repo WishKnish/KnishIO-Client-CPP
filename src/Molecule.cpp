@@ -905,16 +905,13 @@ bool Molecule::verifyOts(const Molecule &molecule)
 	}
 
 	// Wrong size? Maybe it's compressed. A 2048-char hex OTS is accepted as-is; anything else
-	// must base64-decode to exactly 2048 hex or the signature is malformed. This is the exact
-	// rule the JS reference (CheckMolecule.ots), the C SDK and the Rust validator apply —
-	// no stricter, no looser.
+	// must base64-decode to exactly 2048 hex or the signature is malformed — the exact rule the
+	// JS reference (CheckMolecule.ots), the C SDK and the Rust validator apply. base64ToHex is
+	// lenient like Buffer.from(s, 'base64') (it skips characters outside the alphabet and never
+	// throws on content), so this length check is the only guard against a malformed signature.
 	if (ots.size() != 2048)
 	{
-		try {
-			ots = base64ToHex(ots);
-		} catch (const std::exception&) {
-			return false;   // JS: SignatureMalformedException
-		}
+		ots = base64ToHex(ots);
 
 		if (ots.size() != 2048)
 		{
@@ -1172,14 +1169,15 @@ std::vector<int8_t> Molecule::enumerate(const std::string &hash)
 }
 
 /**
-  * Normalize enumerated string to ensure that the total sum of all symbols is exactly zero. This
-  * ensures that exactly 50% of the WOTS+ key is leaked with each usage, ensuring predictable key
-  * safety:
-  * The sum of each symbol within Hm shall be presented by m
-  *  While m0 iterate across that set�s integers as Im:
-  *    If m0 and Im>-8 , let Im=Im-1
-  *    If m<0 and Im<8 , let Im=Im+1
-  *    If m=0, stop the iteration
+  * Normalize the enumerated hash so its 64 symbols sum to exactly zero (JS Molecule.normalize):
+  * while the sum m is non-zero, walk the symbols in order; if m > 0 decrement each symbol above -8,
+  * if m < 0 increment each symbol below 8, and stop as soon as m == 0.
+  *
+  * This does NOT fix how much of the key a signature reveals. sign() and verifyOts() read only
+  * normalizedHash[0..15] (the 2048-hex key is 16 chunks of 128), and a zero sum over all 64
+  * symbols says nothing about those 16. The invariant the scheme relies on is per chain: signing
+  * hashes chunk i (8 - n[i]) times and verification (8 + n[i]) times, 16 in total, which is what
+  * lets verifyOts() rebuild the signer's address.
   *
   * @param {Array} mappedHashArray
   * @returns {*}
