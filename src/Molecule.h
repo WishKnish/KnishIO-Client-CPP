@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>  // int8_t in the enumerate/normalize signatures below
 #include <memory>
 
 #include "Atom.h"
@@ -39,13 +40,20 @@ public:
 	std::vector<Atom> initWithdrawBuffer(const Wallet &sourceWallet, const std::vector<Wallet> &recipientWallets, const std::vector<std::string> &amounts, const Wallet &remainderWallet);
 	std::vector<Atom> initAuthorization(const Wallet &sourceWallet, bool encrypt = false);
 
-	std::string sign(const std::string &secret, bool anonymous = false);
+	// compressed mirrors JS Molecule.sign({ compressed = true }) and the C SDK's
+	// knishio_molecule_sign(..., bool compressed): the 2048-hex OTS is base64-compressed
+	// to 1368 characters before being chunked across the atoms. Every other SDK ships
+	// this form; do not pass false unless an uncompressed hex OTS is explicitly required.
+	std::string sign(const std::string &secret, bool anonymous = false, bool compressed = true);
 
 	std::string toJson() const;
 
 	static Molecule jsonToObject(const std::string &json);
-	static std::vector<char> enumerate(const std::string &hash);
-	static std::vector<char> normalize(const std::vector<char> &mappedHashArray);
+	// int8_t, NOT char: plain `char` is UNSIGNED on aarch64 (and every other target whose ABI
+	// says so), which turns the -8..8 symbol values into 248..255 and makes the WOTS+ chain
+	// counts 8 - n / 8 + n diverge from every other SDK. The type is the invariant here.
+	static std::vector<int8_t> enumerate(const std::string &hash);
+	static std::vector<int8_t> normalize(const std::vector<int8_t> &mappedHashArray);
 	static bool verify(const Molecule &molecule);
 	static bool verifyMolecularHash(const Molecule &molecule);
 	static bool verifyOts(const Molecule &molecule);

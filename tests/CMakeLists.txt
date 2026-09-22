@@ -141,6 +141,34 @@ set_tests_properties(LegacyMlkem768Compat PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:legacy_mlkem768_compat>
 )
 
+# The WOTS+ one-time signature must be byte-compatible with the other seven SDKs in BOTH
+# directions: C++ must produce the 1368-char base64 form they produce (chunked with ceil, so
+# chunks == atoms), and accept the signatures they emit — including the uncompressed 2048-hex
+# form the JS reference, the C SDK and the Rust validator all still accept. Fixture path is
+# baked in; KNISHIO_CROSS_PLATFORM_VECTORS still overrides it.
+add_executable(wots_signature_parity wots_signature_parity.cpp)
+target_link_libraries(wots_signature_parity
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(wots_signature_parity PRIVATE cxx_std_20)
+target_compile_definitions(wots_signature_parity PRIVATE
+    KNISHIO_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cross-platform-test-vectors.json"
+)
+set_target_properties(wots_signature_parity PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME WotsSignatureParity
+    COMMAND wots_signature_parity
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(WotsSignatureParity PROPERTIES
+    LABELS "crypto;signature;vectors;parity"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:wots_signature_parity>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage

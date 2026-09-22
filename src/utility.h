@@ -12,6 +12,11 @@ std::vector<unsigned char> fromHexString(const std::string &str);
 std::string toBase64(const std::vector<uint8_t> &data);
 std::vector<uint8_t> fromBase64(const std::string &str);
 
+// 2048-hex WOTS+ signature <-> 1368-char base64 (RFC 4648 standard alphabet, '=' padding).
+// Composed from fromHexString/toBase64 and fromBase64/toHexString; adds no new encoder.
+std::string hexToBase64(const std::string &hex);
+std::string base64ToHex(const std::string &b64);
+
 std::vector<std::string> chunkSubstr(const std::string &str, size_t size);
 std::string randomString(size_t length = 256, const char *alphabet = "abcdef0123456789");
 

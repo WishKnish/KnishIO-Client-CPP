@@ -294,3 +294,12 @@ std::vector<uint8_t> fromBase64(const std::string &str) {
     
     return result;
 }
+
+// 2048-hex WOTS+ signature <-> 1368-char base64. Mirrors the JS reference
+// (strings.js hexToBase64/base64ToHex), which is Buffer.from(hex,'hex').toString('base64')
+// and its inverse. hexToBase64 throws std::invalid_argument on odd-length or non-hex input
+// (via fromHexString); base64ToHex is lenient like Buffer.from(str,'base64') — it skips
+// characters outside the alphabet — so callers must length-check the result.
+std::string hexToBase64(const std::string &hex) { return toBase64(fromHexString(hex)); }
+
+std::string base64ToHex(const std::string &b64) { return toHexString(fromBase64(b64)); }

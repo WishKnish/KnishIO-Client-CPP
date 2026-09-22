@@ -595,14 +595,16 @@ std::vector<Atom> Molecule::initShadowWalletClaim(const Wallet &sourceWallet, co
 
 /**
    * Creates a one-time signature for a molecule and breaks it up across multiple atoms within that
-   * molecule. Resulting 4096 byte (2048 character) string is the one-time signature.
+   * molecule. The raw signature is a 2048-character hex string; with compressed = true (the default,
+   * and what every other SDK emits) it is base64-compressed to 1368 characters before chunking.
    *
    * @param {string} secret
    * @param {boolean} anonymous
+   * @param {boolean} compressed
    * @returns {*}
    * @throws {AtomsNotFoundException}
    */
-std::string Molecule::sign(const std::string &secret, bool anonymous)
+std::string Molecule::sign(const std::string &secret, bool anonymous, bool compressed)
 {
 	if (this->atoms.empty())
 	{
@@ -640,8 +642,19 @@ std::string Molecule::sign(const std::string &secret, bool anonymous)
 		signatureFragments += workingChunk;
 	}
 
-	// Chunking the signature across multiple atoms
-	auto chunkedSignature = chunkSubstr(signatureFragments, (size_t)std::round((double)signatureFragments.size() / this->atoms.size()));
+	// Compressing the OTS — JS Molecule.sign() default (compressed=true → hexToBase64):
+	// 2048 hex chars → 1368 base64 chars. Every other SDK ships this form.
+	if (compressed)
+	{
+		signatureFragments = hexToBase64(signatureFragments);
+	}
+
+	// Chunking the signature across multiple atoms. Integer ceil division, as the C SDK does
+	// (molecule.c:460) and as JS Math.ceil does: std::round could yield MORE chunks than atoms
+	// (1368 / 7 = 195.4 → round 195 → 8 chunks) and the assignment loop below then indexes
+	// atoms[7] on a 7-atom molecule — an out-of-bounds write, not just a parity break.
+	const size_t chunkSize = (signatureFragments.size() + this->atoms.size() - 1) / this->atoms.size();
+	auto chunkedSignature = chunkSubstr(signatureFragments, chunkSize);
 
 	std::string lastPosition;
 
@@ -821,11 +834,13 @@ Molecule Molecule::jsonToObject(const std::string &jsonStr)
 
 bool Molecule::verify(const Molecule &molecule)
 {
-	// Cross-SDK validation: Hash + token balance is sufficient
-	// OTS verification requires sender's wallet (not available cross-platform)
-	// Following C SDK pattern: "For now, just verify that all atoms have consistent properties"
-
+	// Mirrors JS CheckMolecule: hash integrity, isotope conservation, AND the one-time
+	// signature. verifyOts() needs no wallet — it rebuilds the signing address from the
+	// fragments and compares it to atoms[0].walletAddress — so nothing about cross-SDK
+	// validation justifies skipping it. It was skipped; that is why C++ accepted every peer
+	// while emitting signatures no peer accepted.
 	bool hashValid = verifyMolecularHash(molecule);
+
 	bool tokenValid = false;
 
 	try {
@@ -834,9 +849,15 @@ bool Molecule::verify(const Molecule &molecule)
 		tokenValid = false;
 	}
 
-	// For cross-SDK compatibility: hash + token-balance validation proves integrity.
-	// OTS verification is skipped (requires the sender's wallet, not available cross-platform).
-	return hashValid && tokenValid;
+	bool otsValid = false;
+
+	try {
+		otsValid = verifyOts(molecule);
+	} catch (const std::exception&) {
+		otsValid = false;
+	}
+
+	return hashValid && tokenValid && otsValid;
 }
 
 /**
@@ -883,6 +904,24 @@ bool Molecule::verifyOts(const Molecule &molecule)
 		ots += atom.otsFragment;
 	}
 
+	// Wrong size? Maybe it's compressed. A 2048-char hex OTS is accepted as-is; anything else
+	// must base64-decode to exactly 2048 hex or the signature is malformed. This is the exact
+	// rule the JS reference (CheckMolecule.ots), the C SDK and the Rust validator apply —
+	// no stricter, no looser.
+	if (ots.size() != 2048)
+	{
+		try {
+			ots = base64ToHex(ots);
+		} catch (const std::exception&) {
+			return false;   // JS: SignatureMalformedException
+		}
+
+		if (ots.size() != 2048)
+		{
+			return false;   // JS: SignatureMalformedException
+		}
+	}
+
 	// Subdivide Kk into 16 segments of 256 bytes (128 characters) each
 	auto otsChunks = chunkSubstr(ots, 128);
 
@@ -905,7 +944,29 @@ bool Molecule::verifyOts(const Molecule &molecule)
 	// Squeeze the sponge to retrieve a 128 byte (64 character) string that should match the sender�s wallet address
 	auto address = shake256Hex(digest, 256);
 
-	return (address == molecule.atoms.front().walletAddress);
+	// Signing address is atoms[0].walletAddress unless atoms[0] carries a `signingWallet` meta
+	// (a JSON object with `address`) — the same override the JS reference (CheckMolecule.js:676-687)
+	// and the Rust validator honour for server-signed local molecules. A malformed override falls
+	// back to walletAddress, as the Rust validator does.
+	std::string signingAddress = molecule.atoms.front().walletAddress;
+
+	for (const auto &kv : molecule.atoms.front().meta)
+	{
+		if (kv.first != "signingWallet") continue;
+
+		try {
+			auto signingWallet = nlohmann::json::parse(kv.second);
+
+			if (signingWallet.contains("address") && signingWallet["address"].is_string())
+			{
+				signingAddress = signingWallet["address"].get<std::string>();
+			}
+		} catch (const std::exception&) { /* keep walletAddress */ }
+
+		break;
+	}
+
+	return (address == signingAddress);
 }
 
 /**
@@ -1071,14 +1132,16 @@ bool Molecule::verifyTokenIsotopeV(const Molecule &molecule)
   * @param {string} hash
   * @returns {Array}
   */
-std::vector<char> Molecule::enumerate(const std::string &hash)
+std::vector<int8_t> Molecule::enumerate(const std::string &hash)
 {
-	std::vector<char> target;
+	// int8_t, not char: the symbol values are SIGNED (-8..8), and plain char is unsigned on
+	// aarch64 — storing -8 there yields 248, which silently rewrites every WOTS+ chain count.
+	std::vector<int8_t> target;
 	target.reserve(hash.size());
 
 	for (auto &c : hash)
 	{
-		char val;
+		int8_t val;
 
 		switch (c)
 		{
@@ -1121,7 +1184,7 @@ std::vector<char> Molecule::enumerate(const std::string &hash)
   * @param {Array} mappedHashArray
   * @returns {*}
   */
-std::vector<char> Molecule::normalize(const std::vector<char> &mappedHashArray)
+std::vector<int8_t> Molecule::normalize(const std::vector<int8_t> &mappedHashArray)
 {
 	int total = 0;
 
@@ -1132,7 +1195,7 @@ std::vector<char> Molecule::normalize(const std::vector<char> &mappedHashArray)
 
 	bool total_condition = (total < 0);
 
-	std::vector<char> mappedHashArrayOut = mappedHashArray;
+	std::vector<int8_t> mappedHashArrayOut = mappedHashArray;
 
 	while (total != 0)
 	{

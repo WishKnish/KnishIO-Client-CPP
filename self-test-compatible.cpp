@@ -694,6 +694,66 @@ private:
             // Sign the molecule
             auto signature = molecule.sign(secret, false);
             Logger::test("Molecule signing", !signature.empty());
+
+            // Byte-identity gate against the frozen cross-SDK vector. Seven SDKs (JS, TS, Python,
+            // PHP, Kotlin, Rust, C) emit ONE base64 OTS for this exact molecule, frozen as
+            // vectors.wotsSignedMetadataMolecule; this asserts C++ reproduces it byte for byte.
+            // Divergence kind is readable from the failure detail: different LENGTHS means the
+            // signature FORMAT diverged (uncompressed hex, or round() instead of ceil() chunking);
+            // equal lengths with different CONTENT means the normalized-hash chain counts diverged
+            // (e.g. a plain `char` normalized hash on a target where char is unsigned).
+            bool ots_vector_ok = true;
+            std::string ots_vector_error;
+            {
+                std::vector<std::string> candidates;
+                if (const char* env = std::getenv("KNISHIO_CROSS_PLATFORM_VECTORS")) candidates.emplace_back(env);
+                candidates.emplace_back("tests/fixtures/cross-platform-test-vectors.json");
+                if (const char* sd = std::getenv("KNISHIO_SHARED_RESULTS")) candidates.emplace_back(std::string(sd) + "/cross-platform-test-vectors.json");
+
+                std::ifstream vf;
+                for (const auto& p : candidates) { vf.open(p); if (vf.is_open()) break; vf.clear(); }
+
+                if (!vf.is_open()) {
+                    // Same policy as testBufferFamily: in an orchestrated cross-SDK run the vectors
+                    // are mandatory, because silently skipping parity coverage is the false green
+                    // this gate exists to stop.
+                    const char* require = std::getenv("KNISHIO_REQUIRE_VECTORS");
+                    const bool must_have = require && std::string(require) == "true";
+                    if (must_have) {
+                        ots_vector_ok = false;
+                        ots_vector_error = "cross-platform-test-vectors.json absent (KNISHIO_REQUIRE_VECTORS=true)";
+                        Logger::test("OTS byte-identical to the cross-SDK frozen vector (wotsSignedMetadataMolecule)",
+                                     false, ots_vector_error);
+                    } else {
+                        Logger::message("  SKIPPED: cross-platform-test-vectors.json absent (standalone CI)", colors::YELLOW);
+                    }
+                } else {
+                    const json frozen = json::parse(vf).at("vectors").at("wotsSignedMetadataMolecule");
+                    const auto expected_fragments = frozen.at("expectedOtsFragments").get<std::vector<std::string>>();
+
+                    auto describe = [](const std::vector<std::string>& fragments) {
+                        std::string lengths = "[", joined;
+                        for (size_t i = 0; i < fragments.size(); ++i) {
+                            if (i > 0) lengths += ",";
+                            lengths += std::to_string(fragments[i].size());
+                            joined += fragments[i];
+                        }
+                        lengths += "]";
+                        return lengths + " starting " + joined.substr(0, std::min<size_t>(16, joined.size()));
+                    };
+
+                    std::vector<std::string> actual_fragments;
+                    for (const auto& atom : molecule.atoms) actual_fragments.push_back(atom.otsFragment);
+
+                    ots_vector_ok = (actual_fragments == expected_fragments);
+                    if (!ots_vector_ok) {
+                        ots_vector_error = "OTS differs from wotsSignedMetadataMolecule: fragment lengths "
+                                           + describe(actual_fragments) + " vs expected " + describe(expected_fragments);
+                    }
+                    Logger::test("OTS byte-identical to the cross-SDK frozen vector (wotsSignedMetadataMolecule)",
+                                 ots_vector_ok, ots_vector_error);
+                }
+            }
             
             // Debug: Inspect molecule before validation
             MoleculeInspector::inspect(molecule, "METADATA MOLECULE");
@@ -717,18 +777,25 @@ private:
             
             Logger::test("Molecule validation", is_valid, validation_error);
             
+            // The byte-identity gate is part of the verdict: a molecule that verifies locally but
+            // does not reproduce the frozen cross-SDK signature is exactly the failure this run
+            // must surface, not a pass with a warning.
+            if (!ots_vector_ok && validation_error == "null") {
+                validation_error = ots_vector_error;
+            }
+
             // Store serialized molecule for cross-SDK verification
             results_.molecules_metadata = molecule.toJson();
             
             // Store test results
             results_.meta_creation = {
-                .passed = is_valid,
+                .passed = is_valid && ots_vector_ok,
                 .molecular_hash = molecule.molecularHash,
                 .atom_count = static_cast<int>(molecule.atoms.size()),
                 .validation_error = validation_error
             };
             
-            return is_valid;
+            return is_valid && ots_vector_ok;
             
         } catch (const std::exception& e) {
             results_.meta_creation.validation_error = e.what();
