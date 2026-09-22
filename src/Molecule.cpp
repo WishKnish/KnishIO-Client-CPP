@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 
 #include "third_party/BigInt/bigInt.h"
@@ -980,7 +981,7 @@ bool Molecule::verifyCrossIsotopeConservation(const Molecule &molecule)
 	}
 
 	// Combined V+B / V+F conservation
-	return std::fabsl(crossSum) < 1e-9L;
+	return std::fabs(crossSum) < 1e-9L;
 }
 
 bool Molecule::verifyTokenIsotopeV(const Molecule &molecule)
