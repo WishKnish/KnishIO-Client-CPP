@@ -103,6 +103,10 @@ struct MoleculeTestResult {
     int atom_count = 0;
     bool has_remainder = false;
     std::string validation_error = "null";
+    // Parts of a test that did not run while the test itself still ran and is counted
+    // (e.g. metaCreation's OTS vector check with the vector file absent). Listed in the
+    // summary and the results JSON, so a pass never stands for checks that were skipped.
+    std::vector<std::string> skipped_checks;
 };
 
 struct MLKEMTestResult {
@@ -114,10 +118,24 @@ struct MLKEMTestResult {
     std::string error;
 };
 
+// A frozen-vector assertion (5b ML-KEM, 5c NaCl). These returned `true` on a missing vector
+// file and were never listed, so a run that asserted nothing read exactly like one that
+// asserted every vector. A skip is recorded, reported under "Tests Skipped" and written to
+// the results JSON; it is never a pass.
+struct VectorTestResult {
+    bool passed = false;
+    bool skipped = false;
+    std::string error;
+};
+
+// No negative case is implemented in this self-test. This defaulted to passed = true with
+// testCount 3, so the results JSON claimed three anti-cheating checks had passed when none
+// had run. It is recorded as skipped with a count of 0.
 struct NegativeTestResult {
-    bool passed = true;  // Default to true for basic implementation
-    std::string description = "Anti-cheating validation tests";
-    int testCount = 3;
+    bool passed = false;
+    bool skipped = false;
+    std::string description = "no negative cases implemented";
+    int testCount = 0;
 };
 
 struct TestResults {
@@ -135,6 +153,8 @@ struct TestResults {
     MoleculeTestResult shadow_wallet_claim;
     MoleculeTestResult buffer_family;
     MLKEMTestResult mlkem768;
+    VectorTestResult mlkem_vectors;
+    VectorTestResult nacl_vectors;
     NegativeTestResult negative_cases;
     std::string molecules_metadata;
     std::string molecules_simple_transfer;
@@ -454,6 +474,7 @@ public:
                             if (meta.contains("passed")) results_.meta_creation.passed = meta["passed"].get<bool>();
                             if (meta.contains("molecularHash")) results_.meta_creation.molecular_hash = meta["molecularHash"].get<std::string>();
                             if (meta.contains("atomCount")) results_.meta_creation.atom_count = meta["atomCount"].get<int>();
+                            if (meta.contains("skippedChecks") && meta["skippedChecks"].is_array()) results_.meta_creation.skipped_checks = meta["skippedChecks"].get<std::vector<std::string>>();
                         }
 
                         // Preserve simple transfer test results
@@ -505,6 +526,7 @@ public:
                             if (buffer.contains("molecularHash")) results_.buffer_family.molecular_hash = buffer["molecularHash"].get<std::string>();
                             if (buffer.contains("atomCount")) results_.buffer_family.atom_count = buffer["atomCount"].get<int>();
                             if (buffer.contains("validationError")) results_.buffer_family.validation_error = buffer["validationError"].get<std::string>();
+                            if (buffer.contains("skippedChecks") && buffer["skippedChecks"].is_array()) results_.buffer_family.skipped_checks = buffer["skippedChecks"].get<std::vector<std::string>>();
                         }
 
                         // Preserve ML-KEM768 test results
@@ -517,10 +539,21 @@ public:
                             if (mlkem.contains("plaintextLength")) results_.mlkem768.plaintext_length = mlkem["plaintextLength"].get<int>();
                         }
 
+                        // Preserve the frozen-vector assertions (5b, 5c), skips included
+                        for (auto [key, vector_result] : {std::pair{"mlkem768Vectors", &results_.mlkem_vectors},
+                                                         std::pair{"naclVectors", &results_.nacl_vectors}}) {
+                            if (!existing_tests.contains(key)) continue;
+                            auto& vec = existing_tests[key];
+                            if (vec.contains("passed")) vector_result->passed = vec["passed"].get<bool>();
+                            if (vec.contains("skipped")) vector_result->skipped = vec["skipped"].get<bool>();
+                            if (vec.contains("error") && vec["error"].is_string()) vector_result->error = vec["error"].get<std::string>();
+                        }
+
                         // Preserve negative-case test results
                         if (existing_tests.contains("negativeCases")) {
                             auto& negative = existing_tests["negativeCases"];
                             if (negative.contains("passed")) results_.negative_cases.passed = negative["passed"].get<bool>();
+                            if (negative.contains("skipped")) results_.negative_cases.skipped = negative["skipped"].get<bool>();
                             if (negative.contains("description")) results_.negative_cases.description = negative["description"].get<std::string>();
                             if (negative.contains("testCount")) results_.negative_cases.testCount = negative["testCount"].get<int>();
                         }
@@ -665,7 +698,7 @@ private:
             auto secret = knishio::KnishIOClient::generateSecret(seed);
             Wallet source_wallet(secret, token, source_position);
             
-            Logger::test("Source wallet creation", true);
+            Logger::message("  • " + std::string("Source wallet creation"));
             
             // Create the fixed remainder wallet (JS/Python parity: same secret, canonical position)
             Wallet remainder_wallet = createFixedRemainderWallet(secret, token);
@@ -686,7 +719,7 @@ private:
             // Initialize metadata molecule (now includes M + I atoms)
             molecule.initMeta(source_wallet, metadata, meta_type, meta_id);
             
-            Logger::test("Metadata molecule initialization", true);
+            Logger::message("  • " + std::string("Metadata molecule initialization"));
 
             // Set fixed timestamps for deterministic testing (before signing)
             setFixedTimestamps(molecule);
@@ -704,6 +737,7 @@ private:
             // (e.g. a plain `char` normalized hash on a target where char is unsigned).
             bool ots_vector_ok = true;
             std::string ots_vector_error;
+            std::vector<std::string> meta_skipped_checks;
             {
                 std::vector<std::string> candidates;
                 if (const char* env = std::getenv("KNISHIO_CROSS_PLATFORM_VECTORS")) candidates.emplace_back(env);
@@ -726,6 +760,8 @@ private:
                                      false, ots_vector_error);
                     } else {
                         Logger::message("  SKIPPED: cross-platform-test-vectors.json absent (standalone CI)", colors::YELLOW);
+                        meta_skipped_checks.emplace_back(
+                            "OTS byte-identity vs wotsSignedMetadataMolecule: cross-platform-test-vectors.json absent");
                     }
                 } else {
                     const json frozen = json::parse(vf).at("vectors").at("wotsSignedMetadataMolecule");
@@ -792,7 +828,8 @@ private:
                 .passed = is_valid && ots_vector_ok,
                 .molecular_hash = molecule.molecularHash,
                 .atom_count = static_cast<int>(molecule.atoms.size()),
-                .validation_error = validation_error
+                .validation_error = validation_error,
+                .skipped_checks = meta_skipped_checks
             };
             
             return is_valid && ots_vector_ok;
@@ -928,6 +965,7 @@ private:
             bool all_pass = true;
             std::string last_hash;
             int atom_total = 0;
+            std::vector<std::string> buffer_skipped_checks;
 
             // ---- DEPOSIT: V (source -balance) -> B (buffer +amount) -> V (remainder +(balance-amount)) ----
             for (const auto& tv : v.at("buffer_deposit_conservation").at("tests")) {
@@ -1020,6 +1058,8 @@ private:
                     all_pass = false;
                 } else {
                     Logger::message("  SKIPPED: buffer_conservation_negative absent (vector not yet vendored)", colors::YELLOW);
+                    buffer_skipped_checks.emplace_back(
+                        "buffer_conservation_negative: vectors absent from canonical-patent-vectors.json");
                 }
             }
 
@@ -1027,7 +1067,8 @@ private:
                 .passed = all_pass,
                 .molecular_hash = last_hash,
                 .atom_count = atom_total,
-                .validation_error = all_pass ? "null" : "buffer family vector validation failed"
+                .validation_error = all_pass ? "null" : "buffer family vector validation failed",
+                .skipped_checks = buffer_skipped_checks
             };
 
             return all_pass;
@@ -1053,11 +1094,11 @@ private:
 
             auto source_secret = knishio::KnishIOClient::generateSecret(source_seed);
             Wallet source_wallet(source_secret, source_token, source_position);
-            Logger::test("Source wallet creation", true);
+            Logger::message("  • " + std::string("Source wallet creation"));
 
             auto recipient_secret = knishio::KnishIOClient::generateSecret(recipient_seed);
             Wallet recipient_wallet(recipient_secret, new_token, recipient_position);
-            Logger::test("Recipient wallet creation", true);
+            Logger::message("  • " + std::string("Recipient wallet creation"));
 
             Wallet remainder_wallet = createFixedRemainderWallet(source_secret, source_token);
 
@@ -1075,7 +1116,7 @@ private:
             };
 
             molecule.initTokenCreation(source_wallet, recipient_wallet, std::to_string(amount), token_meta);
-            Logger::test("Token creation initialization", true);
+            Logger::message("  • " + std::string("Token creation initialization"));
 
             setFixedTimestamps(molecule);
 
@@ -1129,11 +1170,11 @@ private:
 
             auto source_secret = knishio::KnishIOClient::generateSecret(source_seed);
             Wallet source_wallet(source_secret, source_token, source_position);
-            Logger::test("Source wallet creation", true);
+            Logger::message("  • " + std::string("Source wallet creation"));
 
             auto new_wallet_secret = knishio::KnishIOClient::generateSecret(new_wallet_seed);
             Wallet new_wallet(new_wallet_secret, new_token, new_wallet_position);
-            Logger::test("New wallet creation", true);
+            Logger::message("  • " + std::string("New wallet creation"));
 
             Wallet remainder_wallet = createFixedRemainderWallet(source_secret, source_token);
 
@@ -1142,7 +1183,7 @@ private:
             molecule.remainderWallet = std::make_shared<Wallet>(remainder_wallet);
 
             molecule.initWalletCreation(source_wallet, new_wallet);
-            Logger::test("Wallet creation initialization", true);
+            Logger::message("  • " + std::string("Wallet creation initialization"));
 
             setFixedTimestamps(molecule);
 
@@ -1196,11 +1237,11 @@ private:
 
             auto source_secret = knishio::KnishIOClient::generateSecret(source_seed);
             Wallet source_wallet(source_secret, source_token, source_position);
-            Logger::test("Source wallet creation", true);
+            Logger::message("  • " + std::string("Source wallet creation"));
 
             auto claim_secret = knishio::KnishIOClient::generateSecret(claim_seed);
             Wallet claim_wallet(claim_secret, claim_token, claim_position);
-            Logger::test("Claim wallet creation", true);
+            Logger::message("  • " + std::string("Claim wallet creation"));
 
             Wallet remainder_wallet = createFixedRemainderWallet(source_secret, source_token);
 
@@ -1211,7 +1252,7 @@ private:
             // The token param is vestigial in JS (it takes only the wallet) — C++ initShadowWalletClaim
             // takes (sourceWallet, wallet); the claim token rides on walletTokenSlug via setMetaWallet.
             molecule.initShadowWalletClaim(source_wallet, claim_wallet);
-            Logger::test("Shadow wallet claim initialization", true);
+            Logger::message("  • " + std::string("Shadow wallet claim initialization"));
 
             setFixedTimestamps(molecule);
 
@@ -1269,13 +1310,13 @@ private:
             Wallet source_wallet(source_secret, token, source_position);
             source_wallet.balance = balance;  // Set balance for testing
             
-            Logger::test("Source wallet creation", true);
+            Logger::message("  • " + std::string("Source wallet creation"));
             
             // Create recipient wallet
             auto recipient_secret = knishio::KnishIOClient::generateSecret(recipient_seed);
             Wallet recipient_wallet(recipient_secret, token, recipient_position);
             
-            Logger::test("Recipient wallet creation", true);
+            Logger::message("  • " + std::string("Recipient wallet creation"));
             
             // Create remainder wallet (canonical fixed position — JS/Python parity)
             std::string remainder_position = "bbbb000000000000cccc111111111111dddd222222222222eeee333333333333";
@@ -1291,7 +1332,7 @@ private:
             // Initialize value transfer (now uses JavaScript UTXO pattern)
             molecule.initValue(source_wallet, recipient_wallet, remainder_wallet, amount);
             
-            Logger::test("Value transfer initialization", true);
+            Logger::message("  • " + std::string("Value transfer initialization"));
 
             // Set fixed timestamps for deterministic testing (before signing)
             setFixedTimestamps(molecule);
@@ -1356,19 +1397,19 @@ private:
             Wallet source_wallet(source_secret, token, source_position);
             source_wallet.balance = balance;
             
-            Logger::test("Source wallet creation", true);
+            Logger::message("  • " + std::string("Source wallet creation"));
             
             // Create remainder wallet with the canonical fixed position (JS/Python parity)
             const std::string remainder_position = "bbbb000000000000cccc111111111111dddd222222222222eeee333333333333";
             Wallet remainder_wallet(source_secret, token, remainder_position);
             
-            Logger::test("Remainder wallet creation", true);
+            Logger::message("  • " + std::string("Remainder wallet creation"));
             
             // Create recipient wallet
             auto recipient_secret = knishio::KnishIOClient::generateSecret(recipient_seed);
             Wallet recipient_wallet(recipient_secret, token, recipient_position);
             
-            Logger::test("Recipient wallet creation", true);
+            Logger::message("  • " + std::string("Recipient wallet creation"));
             
             // Create molecule for value transfer with remainder
             Molecule molecule;
@@ -1380,7 +1421,7 @@ private:
             // Initialize value transfer with remainder (JavaScript UTXO pattern)
             molecule.initValue(source_wallet, recipient_wallet, remainder_wallet, amount);
             
-            Logger::test("Value transfer with remainder initialization", true);
+            Logger::message("  • " + std::string("Value transfer with remainder initialization"));
 
             // Set fixed timestamps for deterministic testing (before signing)
             setFixedTimestamps(molecule);
@@ -1439,7 +1480,7 @@ private:
             // JavaScript pattern: Create encryption wallet from seed
             auto secret = knishio::KnishIOClient::generateSecret("TESTSEED");
             Wallet encryption_wallet(secret, "ENCRYPT", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 64, 768);
-            Logger::test("Encryption wallet creation", true);
+            Logger::message("  • " + std::string("Encryption wallet creation"));
             
             // JavaScript pattern: Check ML-KEM768 public key generation
             bool public_key_generated = !encryption_wallet.mlkem_public_key.empty();
@@ -1503,8 +1544,8 @@ private:
             std::ifstream f;
             for (const auto& p : candidates) { f.open(p); if (f.is_open()) break; f.clear(); }
             if (!f.is_open()) {
-                Logger::message("  SKIPPED: ML-KEM768 vector file absent (standalone CI)", colors::YELLOW);
-                return true; // skip, not fail
+                return skipVectorTest(results_.mlkem_vectors,
+                                      "cross-platform-test-vectors.json absent");
             }
             json vectors = json::parse(f);
             const auto& mlkem = vectors.at("vectors").at("mlkem768");
@@ -1541,11 +1582,32 @@ private:
             std::string plaintext1024 = w1024.decryptMessageML(enc1024);
             bool decrypt1024_ok = (plaintext1024 == dec1024.at("expectedPlaintext").get<std::string>());
             Logger::test("ML-KEM1024 frozen sample decrypts to vector plaintext", decrypt1024_ok);
-            return keygen_ok && decrypt_ok && keygen1024_ok && decrypt1024_ok;
+            results_.mlkem_vectors.passed = keygen_ok && decrypt_ok && keygen1024_ok && decrypt1024_ok;
+            if (!results_.mlkem_vectors.passed) results_.mlkem_vectors.error = "ML-KEM output differs from the frozen vector";
+            return results_.mlkem_vectors.passed;
         } catch (const std::exception& e) {
             std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
+            results_.mlkem_vectors.error = e.what();
             return false;
         }
+    }
+
+    // A vector assertion that cannot run for want of its fixture. Recorded as skipped — never
+    // as a pass — and fails the run only under KNISHIO_REQUIRE_VECTORS=true, like the other
+    // vector gates in this file.
+    static bool skipVectorTest(VectorTestResult& result, const std::string& reason) {
+        const char* require = std::getenv("KNISHIO_REQUIRE_VECTORS");
+        const bool must_have = require && std::string(require) == "true";
+        result.passed = false;
+        result.skipped = !must_have;
+        if (must_have) {
+            result.error = reason + " (KNISHIO_REQUIRE_VECTORS=true)";
+            Logger::message("  FAILED: " + result.error, colors::RED);
+            return false;
+        }
+        result.error = reason;
+        Logger::message("  SKIPPED: " + reason, colors::YELLOW);
+        return true;
     }
 
     // Classical NaCl (X25519 scalarmult_base + crypto_box/secretbox + sealed-box),
@@ -1562,17 +1624,21 @@ private:
             std::ifstream f;
             for (const auto& p : candidates) { f.open(p); if (f.is_open()) break; f.clear(); }
             if (!f.is_open()) {
-                Logger::message("  SKIPPED: cross-platform vector file absent (standalone CI)", colors::YELLOW);
-                return true; // skip, not fail
+                return skipVectorTest(results_.nacl_vectors,
+                                      "cross-platform-test-vectors.json absent");
             }
             json vectors = json::parse(f);
             const auto& root = vectors.at("vectors");
             if (!root.contains("nacl")) {
-                Logger::message("  SKIPPED: nacl section absent", colors::YELLOW);
-                return true;
+                return skipVectorTest(results_.nacl_vectors,
+                                      "nacl section absent from cross-platform-test-vectors.json");
             }
             const auto& nacl = root.at("nacl");
-            if (sodium_init() < 0) { std::cout << "  sodium_init failed\n"; return false; }
+            if (sodium_init() < 0) {
+                std::cout << "  sodium_init failed\n";
+                results_.nacl_vectors.error = "sodium_init failed";
+                return false;
+            }
 
             bool all_ok = true;
 
@@ -1615,21 +1681,29 @@ private:
                 all_ok = all_ok && ok;
             }
 
+            results_.nacl_vectors.passed = all_ok;
+            if (!all_ok) results_.nacl_vectors.error = "libsodium output differs from the frozen vector";
             return all_ok;
         } catch (const std::exception& e) {
             std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << std::endl;
+            results_.nacl_vectors.error = e.what();
             return false;
         }
     }
 
     bool testNegativeCases() {
         Logger::message("\n6. Negative Test Cases (Anti-Cheating)", colors::BLUE);
-        
-        // For this C++ implementation, we'll add basic negative test validation
-        // This ensures the validation system can actually fail when it should
-        Logger::message("  ✅ Negative test validation framework available", colors::GREEN);
-        Logger::message("  ✅ Anti-cheating measures in place", colors::GREEN);
-        
+
+        // Nothing is checked here. This printed two ✅ lines and returned true, and the
+        // results JSON claimed three passing anti-cheating checks. It is a skip, not a
+        // missing fixture, so it never fails the run (KNISHIO_REQUIRE_VECTORS included).
+        Logger::message("  ⏭️  No negative cases are implemented in the C++ self-test (0 checks run)", colors::YELLOW);
+        results_.negative_cases = {
+            .passed = false,
+            .skipped = true,
+            .description = "no negative cases implemented",
+            .testCount = 0
+        };
         return true;
     }
     
@@ -1674,37 +1748,48 @@ private:
             "metadata", "simpleTransfer", "complexTransfer", "tokenCreation",
             "walletCreation", "shadowWalletClaim", "mlkem768"
         };
+        // the eight SDKs' results files (edge-kit/aggregate.mjs EXPECTED_LANES)
+        static const std::array<const char*, 8> kCanonicalResultsFiles = {
+            "javascript", "typescript", "python", "php", "kotlin", "rust", "c", "cpp"
+        };
 
         bool all_valid = true;
-        int sdk_count = 0;
+        // Peers whose results file exists and was examined, versus peers that passed every
+        // check. targetsValidated used to be the number of files FOUND, so a peer whose
+        // molecules all failed still counted as validated. Only a peer whose six molecule
+        // types all verified and whose ML-KEM768 ciphertext decrypted to its plaintext counts.
+        int peers_found = 0;
+        int peers_validated = 0;
 
-        // Iterate through all SDK result files (excluding cpp-results.json)
-        for (const auto& entry : std::filesystem::directory_iterator(shared_dir)) {
-            if (!entry.is_regular_file()) continue;
+        // Iterate the canonical peers, not whatever *-results.json happens to be in the
+        // directory: a missing peer is a gap in coverage, and a stray file is not a peer.
+        for (const char* canonical_name : kCanonicalResultsFiles) {
+            const std::string sdk_name = canonical_name;
+            if (sdk_name == "cpp") continue;
 
-            std::string filename = entry.path().filename().string();
-            if (!filename.ends_with("-results.json") || filename == "cpp-results.json") {
+            const std::string filename = sdk_name + "-results.json";
+            const std::filesystem::path peer_path = std::filesystem::path(shared_dir) / filename;
+            if (!std::filesystem::is_regular_file(peer_path)) {
+                Logger::message("\n  ❌ " + filename + " missing", colors::RED);
                 continue;
             }
-
-            // Extract SDK name from filename (e.g., "javascript-results.json" -> "javascript")
-            std::string sdk_name = filename.substr(0, filename.find("-results.json"));
 
             // Capitalize SDK name for display (javascript -> JavaScript, php -> PHP, etc.)
             std::string display_name = sdk_name;
             if (!display_name.empty()) {
                 display_name[0] = std::toupper(display_name[0]);
             }
-            if (sdk_name == "cpp") display_name = "C++";
-            else if (sdk_name == "typescript") display_name = "TypeScript";
+            if (sdk_name == "typescript") display_name = "TypeScript";
             else if (sdk_name == "javascript") display_name = "JavaScript";
 
             Logger::message("\n  🧪 Validating " + display_name + " SDK molecules:", colors::CYAN);
-            sdk_count++;
+            peers_found++;
+            bool peer_ok = true;
+            bool mlkem_decrypted = false;
 
             try {
                 // Read and parse SDK results JSON
-                std::ifstream result_file(entry.path());
+                std::ifstream result_file(peer_path);
                 if (!result_file.is_open()) {
                     Logger::test(sdk_name + " file read", false, "Could not open results file");
                     all_valid = false;
@@ -1738,7 +1823,7 @@ private:
                         Logger::message("    ❌ " + display_name + " published no molecule for: " + joined,
                                         colors::RED);
                         Logger::test(display_name + " publishes all required molecules", false);
-                        all_valid = false;
+                        peer_ok = false;
                     }
                 }
 
@@ -1753,10 +1838,10 @@ private:
                             Molecule molecule = Molecule::jsonToObject(molecule_json);
                             bool is_valid = Molecule::verify(molecule);
                             Logger::test(sdk_name + " metadata molecule validation", is_valid);
-                            if (!is_valid) all_valid = false;
+                            if (!is_valid) peer_ok = false;
                         } catch (const std::exception& e) {
                             Logger::test(sdk_name + " metadata molecule validation", false, e.what());
-                            all_valid = false;
+                            peer_ok = false;
                         }
                     }
 
@@ -1767,10 +1852,10 @@ private:
                             Molecule molecule = Molecule::jsonToObject(molecule_json);
                             bool is_valid = Molecule::verify(molecule);
                             Logger::test(sdk_name + " simpleTransfer molecule validation", is_valid);
-                            if (!is_valid) all_valid = false;
+                            if (!is_valid) peer_ok = false;
                         } catch (const std::exception& e) {
                             Logger::test(sdk_name + " simpleTransfer molecule validation", false, e.what());
-                            all_valid = false;
+                            peer_ok = false;
                         }
                     }
 
@@ -1781,10 +1866,10 @@ private:
                             Molecule molecule = Molecule::jsonToObject(molecule_json);
                             bool is_valid = Molecule::verify(molecule);
                             Logger::test(sdk_name + " complexTransfer molecule validation", is_valid);
-                            if (!is_valid) all_valid = false;
+                            if (!is_valid) peer_ok = false;
                         } catch (const std::exception& e) {
                             Logger::test(sdk_name + " complexTransfer molecule validation", false, e.what());
-                            all_valid = false;
+                            peer_ok = false;
                         }
                     }
 
@@ -1795,10 +1880,10 @@ private:
                             Molecule molecule = Molecule::jsonToObject(molecule_json);
                             bool is_valid = Molecule::verify(molecule);
                             Logger::test(sdk_name + " tokenCreation molecule validation", is_valid);
-                            if (!is_valid) all_valid = false;
+                            if (!is_valid) peer_ok = false;
                         } catch (const std::exception& e) {
                             Logger::test(sdk_name + " tokenCreation molecule validation", false, e.what());
-                            all_valid = false;
+                            peer_ok = false;
                         }
                     }
 
@@ -1809,10 +1894,10 @@ private:
                             Molecule molecule = Molecule::jsonToObject(molecule_json);
                             bool is_valid = Molecule::verify(molecule);
                             Logger::test(sdk_name + " walletCreation molecule validation", is_valid);
-                            if (!is_valid) all_valid = false;
+                            if (!is_valid) peer_ok = false;
                         } catch (const std::exception& e) {
                             Logger::test(sdk_name + " walletCreation molecule validation", false, e.what());
-                            all_valid = false;
+                            peer_ok = false;
                         }
                     }
 
@@ -1823,10 +1908,10 @@ private:
                             Molecule molecule = Molecule::jsonToObject(molecule_json);
                             bool is_valid = Molecule::verify(molecule);
                             Logger::test(sdk_name + " shadowWalletClaim molecule validation", is_valid);
-                            if (!is_valid) all_valid = false;
+                            if (!is_valid) peer_ok = false;
                         } catch (const std::exception& e) {
                             Logger::test(sdk_name + " shadowWalletClaim molecule validation", false, e.what());
-                            all_valid = false;
+                            peer_ok = false;
                         }
                     }
 
@@ -1857,22 +1942,33 @@ private:
                                     }
 
                                     Logger::test(sdk_name + " mlkem768 decryption compatibility", decryption_success);
-                                    if (!decryption_success) all_valid = false;
+                                    if (decryption_success) mlkem_decrypted = true;
+                                    else peer_ok = false;
 
                                 } catch (const std::exception& e) {
                                     Logger::test(sdk_name + " mlkem768 decryption compatibility", false, e.what());
-                                    all_valid = false;
+                                    peer_ok = false;
                                 }
+                            } else {
+                                Logger::test(sdk_name + " mlkem768 decryption compatibility", false,
+                                             "mlkem768 carries no encryptedData/originalPlaintext to decrypt");
+                                peer_ok = false;
                             }
                         } catch (const std::exception& e) {
                             Logger::test(sdk_name + " mlkem768 compatibility", false, e.what());
-                            all_valid = false;
+                            peer_ok = false;
                         }
                     }
                 }
 
             } catch (const std::exception& e) {
                 Logger::message(std::string("  ❌ Error validating ") + sdk_name + " SDK: " + e.what(), colors::RED);
+                peer_ok = false;
+            }
+
+            if (peer_ok && mlkem_decrypted) {
+                peers_validated++;
+            } else {
                 all_valid = false;
             }
         }
@@ -1882,9 +1978,9 @@ private:
         // Zero peers in Round 2 means Round 2 did not happen. This returned true —
         // "compatible" — having validated nothing whatsoever.
         results_.cross_targets_expected = kExpectedPeerCount;
-        results_.cross_targets_validated = sdk_count;
+        results_.cross_targets_validated = peers_validated;
 
-        if (sdk_count == 0) {
+        if (peers_found == 0) {
             Logger::message("\n  ❌ No peer SDK results found — nothing to cross-validate", colors::RED);
             results_.cross_sdk_compatible = false;
             return false;
@@ -1893,12 +1989,13 @@ private:
         // COVERAGE FLOOR. `all_valid` starts true and only becomes false on a DETECTED
         // failure, so it records "nothing went wrong", not "everything was checked". Those
         // differ whenever fewer peers were examined than expected. Require both.
-        const bool full_coverage = (sdk_count == kExpectedPeerCount);
+        const bool full_coverage = (peers_validated == kExpectedPeerCount);
         if (!full_coverage) {
-            Logger::message("\n  ❌ Incomplete coverage: validated " + std::to_string(sdk_count) + "/"
-                            + std::to_string(kExpectedPeerCount) + " peer SDKs", colors::RED);
+            Logger::message("\n  ❌ Incomplete coverage: validated " + std::to_string(peers_validated) + "/"
+                            + std::to_string(kExpectedPeerCount) + " peer SDKs ("
+                            + std::to_string(peers_found) + " results files found)", colors::RED);
         }
-        Logger::message("  📊 Cross-validation coverage: " + std::to_string(sdk_count) + "/"
+        Logger::message("  📊 Cross-validation coverage: " + std::to_string(peers_validated) + "/"
                         + std::to_string(kExpectedPeerCount) + " peer SDKs", colors::CYAN);
 
         Logger::message("", colors::RESET);
@@ -1943,7 +2040,8 @@ private:
                 {"passed", results_.meta_creation.passed},
                 {"molecularHash", results_.meta_creation.molecular_hash},
                 {"atomCount", results_.meta_creation.atom_count},
-                {"validationError", results_.meta_creation.validation_error}
+                {"validationError", results_.meta_creation.validation_error},
+                {"skippedChecks", results_.meta_creation.skipped_checks}
             };
             
             tests["simpleTransfer"] = {
@@ -1987,7 +2085,8 @@ private:
                 {"skipped", results_.buffer_family.skipped},
                 {"molecularHash", results_.buffer_family.molecular_hash},
                 {"atomCount", results_.buffer_family.atom_count},
-                {"validationError", results_.buffer_family.validation_error}
+                {"validationError", results_.buffer_family.validation_error},
+                {"skippedChecks", results_.buffer_family.skipped_checks}
             };
 
             tests["mlkem768"] = {
@@ -2002,8 +2101,18 @@ private:
                 tests["mlkem768"]["error"] = results_.mlkem768.error;
             }
 
+            for (const auto& [key, vector_result] : {std::pair{"mlkem768Vectors", &results_.mlkem_vectors},
+                                                    std::pair{"naclVectors", &results_.nacl_vectors}}) {
+                tests[key] = {
+                    {"passed", vector_result->passed},
+                    {"skipped", vector_result->skipped}
+                };
+                if (!vector_result->error.empty()) tests[key]["error"] = vector_result->error;
+            }
+
             tests["negativeCases"] = {
                 {"passed", results_.negative_cases.passed},
+                {"skipped", results_.negative_cases.skipped},
                 {"description", results_.negative_cases.description},
                 {"testCount", results_.negative_cases.testCount}
             };
@@ -2071,7 +2180,11 @@ private:
         // Count passed tests. Skipped tests are reported separately — counting a
         // skip as either a pass or a failure is what made this summary contradict
         // the exit-code gate.
-        int total_tests = 10;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + negative
+        int total_tests = 12;  // crypto + 3 base + 3 extended (token/wallet/shadow) + buffer family + ML-KEM768 + ML-KEM vectors + NaCl vectors + negative
+        // Cross-validation is a test whenever it ran (normal mode). Left out of the tally, a
+        // run whose peers failed still printed "Tests Passed: 12/12" above its exit status 1.
+        const bool cross_counted = results_.cross_validation_ran;
+        if (cross_counted) total_tests++;
         int passed_tests = 0;
         int skipped_tests = 0;
         if (results_.crypto.passed) passed_tests++;
@@ -2084,7 +2197,13 @@ private:
         if (results_.buffer_family.passed) passed_tests++;
         else if (results_.buffer_family.skipped) skipped_tests++;
         if (results_.mlkem768.passed) passed_tests++;
+        if (results_.mlkem_vectors.passed) passed_tests++;
+        else if (results_.mlkem_vectors.skipped) skipped_tests++;
+        if (results_.nacl_vectors.passed) passed_tests++;
+        else if (results_.nacl_vectors.skipped) skipped_tests++;
         if (results_.negative_cases.passed) passed_tests++;
+        else if (results_.negative_cases.skipped) skipped_tests++;
+        if (cross_counted && results_.cross_sdk_compatible) passed_tests++;
 
         const int failed_tests = total_tests - passed_tests - skipped_tests;
         const char* color = (failed_tests == 0) ? colors::GREEN : colors::RED;
@@ -2094,6 +2213,32 @@ private:
                       << colors::RESET << std::endl;
             if (results_.buffer_family.skipped) {
                 std::cout << "  - bufferFamily: " << results_.buffer_family.validation_error << std::endl;
+            }
+            if (results_.mlkem_vectors.skipped) {
+                std::cout << "  - mlkem768Vectors: " << results_.mlkem_vectors.error << std::endl;
+            }
+            if (results_.nacl_vectors.skipped) {
+                std::cout << "  - naclVectors: " << results_.nacl_vectors.error << std::endl;
+            }
+            if (results_.negative_cases.skipped) {
+                std::cout << "  - negativeCases: " << results_.negative_cases.description << std::endl;
+            }
+        }
+
+        // Parts of counted tests that did not run: the test's verdict stands, but it must not
+        // be read as covering these checks.
+        const std::pair<const char*, const std::vector<std::string>*> partial[] = {
+            {"metaCreation", &results_.meta_creation.skipped_checks},
+            {"bufferFamily", &results_.buffer_family.skipped_checks}
+        };
+        bool partial_header = false;
+        for (const auto& [name, checks] : partial) {
+            for (const auto& check : *checks) {
+                if (!partial_header) {
+                    std::cout << colors::YELLOW << "Checks Skipped inside counted tests:" << colors::RESET << std::endl;
+                    partial_header = true;
+                }
+                std::cout << "  - " << name << ": " << check << std::endl;
             }
         }
 
@@ -2126,6 +2271,19 @@ private:
             }
             if (!results_.mlkem768.passed) {
                 std::cout << "  - mlkem768: " << results_.mlkem768.error << std::endl;
+            }
+            if (!results_.mlkem_vectors.passed && !results_.mlkem_vectors.skipped) {
+                std::cout << "  - mlkem768Vectors: " << results_.mlkem_vectors.error << std::endl;
+            }
+            if (!results_.nacl_vectors.passed && !results_.nacl_vectors.skipped) {
+                std::cout << "  - naclVectors: " << results_.nacl_vectors.error << std::endl;
+            }
+            if (!results_.negative_cases.passed && !results_.negative_cases.skipped) {
+                std::cout << "  - negativeCases: " << results_.negative_cases.description << std::endl;
+            }
+            if (cross_counted && !results_.cross_sdk_compatible) {
+                std::cout << "  - crossSdkValidation: validated " << results_.cross_targets_validated << "/"
+                          << results_.cross_targets_expected << " peer SDKs" << std::endl;
             }
         }
         
