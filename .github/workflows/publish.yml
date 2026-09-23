@@ -159,6 +159,13 @@ jobs:
           KNISHIO_SHARED_RESULTS="$PWD/shared-test-results" \
             ./build/cpp_self_test
 
+      # The unit tests the self-test does not cover: WotsSignatureParity (the cross-SDK
+      # one-time-signature form), LegacyMlkem768Compat, EncryptedTransportFailClosed,
+      # SecretStorage, MlkemEncapsEntropy, SHAKE256Validation. This job built them and never ran
+      # them. CipherHashLive reports Skipped here (no validator; SKIP_RETURN_CODE 77).
+      - name: Unit tests (ctest)
+        run: ctest --test-dir build --output-on-failure
+
       - name: clang-tidy (lint gate, Linux only)
         if: runner.os == 'Linux'
         run: cmake --build build --target lint

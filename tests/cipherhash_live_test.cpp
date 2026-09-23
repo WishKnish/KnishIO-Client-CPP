@@ -7,7 +7,8 @@
 // pubkey, which the client decrypts. The transport must be TRANSPARENT, so we assert the encrypted
 // result's DATA equals a plaintext baseline (not merely a non-error response).
 //
-// Gated on CIPHERHASH_TEST_URL (skips cleanly when unset → CI-safe). Run live:
+// Gated on CIPHERHASH_TEST_URL: unset, it exits 77, which ctest reports as Skipped (SKIP_RETURN_CODE in
+// tests/CMakeLists.txt) rather than Passed. Run live:
 //   CIPHERHASH_TEST_URL=http://localhost:8081/graphql ./build/tests/cipherhash_live_test
 #include <cstdlib>
 #include <iostream>
@@ -22,7 +23,7 @@ int main() {
     const char* envUrl = std::getenv("CIPHERHASH_TEST_URL");
     if (envUrl == nullptr || std::string(envUrl).empty()) {
         std::cout << "SKIP: CIPHERHASH_TEST_URL not set — skipping live CipherHash test\n";
-        return 0;
+        return 77;  // ctest SKIP_RETURN_CODE: reported as Skipped, never as Passed
     }
     const std::string url(envUrl);
 

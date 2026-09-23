@@ -48,7 +48,7 @@ set_tests_properties(SHAKE256Validation PROPERTIES
 )
 
 # PQ-transport (Phase E): live ML-KEM CipherHash round-trip test. Gated at runtime on
-# CIPHERHASH_TEST_URL (skips cleanly → CI-safe even without a reachable validator).
+# CIPHERHASH_TEST_URL: unset, it exits 77 and ctest reports it Skipped, not Passed.
 add_executable(cipherhash_live_test cipherhash_live_test.cpp)
 target_link_libraries(cipherhash_live_test
     PRIVATE knishio-client-cpp
@@ -66,6 +66,7 @@ add_test(
 set_tests_properties(CipherHashLive PROPERTIES
     LABELS "integration;network;pq-transport"
     TIMEOUT 60
+    SKIP_RETURN_CODE 77
 )
 
 # PQ-transport (Phase E): an encryption-enabled client must fail CLOSED when the ML-KEM transport
