@@ -22,7 +22,7 @@ using KnishIO::Atom;
 // Version information.
 // Keep in step with project(VERSION) in CMakeLists.txt — this is what
 // KnishIOClient::getVersion() returns to consumers.
-constexpr const char* SDK_VERSION = "1.2.0";
+constexpr const char* SDK_VERSION = "1.2.1";
 
 // Forward declare implementation class
 class KnishIOClient::Impl {

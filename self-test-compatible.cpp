@@ -124,7 +124,7 @@ struct TestResults {
     std::string sdk = "C++";
     // Keep in step with project(VERSION) in CMakeLists.txt — the gauntlet's snapshot
     // coherence gate fails an SDK whose reported version disagrees with its manifest.
-    std::string version = "1.2.0";
+    std::string version = "1.2.1";
     std::string timestamp;
     CryptoTestResult crypto;
     MoleculeTestResult meta_creation;

@@ -14,6 +14,54 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [1.2.1] — 2026-09-23
+
+### Changed
+
+- `Molecule::sign(secret, anonymous = false, compressed = true)` base64-compresses the 2048-hex
+  one-time signature to 1368 characters before splitting it across the atoms, as every other
+  SDK's 1.2.x does. Existing two-argument calls compile unchanged.
+- `Molecule::enumerate()` and `Molecule::normalize()` return `std::vector<int8_t>` instead of
+  `std::vector<char>`; code that names the element type switches to `int8_t` or `auto`. These
+  installed-header changes ship in a patch release to keep the C++ SDK in step with the fleet's
+  1.2.x.
+
+### Fixed
+
+- Signatures are byte-identical to the other seven SDKs': 684 + 684 base64 characters on the
+  frozen `wotsSignedMetadataMolecule` vector, where 1.2.0 emitted 1024 + 1024 hex characters that
+  no other SDK accepts.
+- Where plain `char` is unsigned (aarch64), `enumerate()` and `normalize()` turned the −8..8 hash
+  symbols into 248..255, so no verifier accepted a signature made there, this SDK's own included.
+- Splitting the 2048-character signature across n atoms used `std::round` for the chunk size,
+  which produced more chunks than atoms whenever `ceil(2048 / round(2048 / n)) > n`; the extra
+  chunks were written past the end of the atom list (undefined behaviour). Up to 64 atoms that
+  happens at 21 sizes: 6, 11, 14, 17, 20, 22, 23, 24, 28, 30, 31, 33, 34, 37, 40, 51, 52, 55, 58,
+  60 and 62. It now uses integer ceiling division, as the JS reference and the C SDK do.
+- `Molecule::verifyOts()` base64-decodes a signature that is not 2048 hex characters and rejects
+  one that does not decode to 2048, the JS reference rule; 1.2.0's rejected every compressed
+  signature, that is, every other SDK's. It also honours a `signingWallet` address in atoms[0]'s
+  meta, as the JS reference and the Rust validator do.
+- The SDK builds on Linux with libstdc++ (missing `<memory>` and `<cmath>` includes, and
+  `std::fabsl`).
+- `normalize()`'s documentation no longer claims the scheme reveals exactly half the key.
+
+### Security
+
+- In 1.2.0 and earlier `Molecule::verify()` did not check the one-time signature, so a molecule
+  with a forged or corrupted signature passed it; `KnishIOClient` uses it as its pre-send check.
+  It now requires a valid one-time signature.
+
+### Notes
+
+- CI and the publish workflow now run `ctest`. Until this release they built the unit tests
+  without running them, so `WotsSignatureParity` (the regression test for the signature fixes
+  above), `LegacyMlkem768Compat` and the other ctest entries ran only locally. `CipherHashLive`
+  reports Skipped, not Passed, when `CIPHERHASH_TEST_URL` is unset.
+- Evidence: the aarch64 edge-kit rig (stock Ubuntu 22.04, no network). In its round 2 all seven
+  other SDKs accept this SDK's molecules; in its round 3 this SDK rejects all seven peers'
+  molecules whose signature had one character changed.
+
 ## [1.2.0] — 2026-09-20
 
 ### Added
@@ -255,7 +303,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.0...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.1...HEAD
+[1.2.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.1
 [1.2.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.0
 [1.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.1.0
 [1.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.0.0
