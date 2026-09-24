@@ -99,14 +99,14 @@ struct MoleculeTestResult {
     // while the caller's `return true` reads as a pass to the exit-code gate —
     // the two disagree silently and the test vanishes from the results JSON.
     bool skipped = false;
-    std::string molecular_hash;
+    std::string molecular_hash{};
     int atom_count = 0;
     bool has_remainder = false;
     std::string validation_error = "null";
     // Parts of a test that did not run while the test itself still ran and is counted
     // (e.g. metaCreation's OTS vector check with the vector file absent). Listed in the
     // summary and the results JSON, so a pass never stands for checks that were skipped.
-    std::vector<std::string> skipped_checks;
+    std::vector<std::string> skipped_checks{};
 };
 
 struct MLKEMTestResult {
@@ -115,7 +115,7 @@ struct MLKEMTestResult {
     bool encryption_success = false;
     bool decryption_success = false;
     int plaintext_length = 0;
-    std::string error;
+    std::string error{};
 };
 
 // A frozen-vector assertion (5b ML-KEM, 5c NaCl). These returned `true` on a missing vector
