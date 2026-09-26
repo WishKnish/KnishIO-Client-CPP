@@ -871,72 +871,137 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
             throw KnishIOException("No secret available for authentication");
         }
         const std::string sec = pImpl_->secret.value();
-
-        // Build the U-isotope authorization molecule. The AUTH source + USER remainder both use
-        // random positions (Wallet default) so re-auth is OTS-safe. U-isotope ProposeMolecule is
-        // PUBLIC (no prior token); the validator extracts the pubkey from the U-atom + issues a
-        // bundle-scoped JWT.
-        Wallet source(sec, "AUTH", "", 64, pImpl_->config.mlKemParameterSet);
-        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);
+        const int mlKem = pImpl_->config.mlKemParameterSet;
         const std::string cell = cellSlug.value_or(pImpl_->config.cellSlug.value_or(std::string{}));
-        Molecule mol(cell);
-        mol.sourceWallet = std::make_shared<Wallet>(source);
-        mol.remainderWallet = std::make_shared<Wallet>(remainder);
-        mol.initAuthorization(source, encrypt);
-        mol.sign(sec);
 
-        // Serialize + strip the validation-context wallets (the validator's MoleculeInput rejects
-        // unknown sourceWallet/remainderWallet fields — toJson emits them when set).
-        nlohmann::json moleculeJson = nlohmann::json::parse(mol.toJson());
-        moleculeJson.erase("sourceWallet");
-        moleculeJson.erase("remainderWallet");
+        // Sign + propose one U-isotope authorization molecule from `source`. The USER remainder
+        // takes a random position (Wallet default) and becomes the new ContinuID head; the I atom
+        // carries previousPosition = source.position. U-isotope ProposeMolecule is PUBLIC (no prior
+        // token); the validator extracts the pubkey from the U-atom + issues a bundle-scoped JWT,
+        // which is bound here (with `source` as the transport's decrypting wallet) on acceptance.
+        auto proposeAuthorization = [&](const Wallet& source) -> std::unique_ptr<response::ResponseRequestAuthorization> {
+            Wallet remainder(sec, "USER", "", 64, mlKem);
+            Molecule mol(cell);
+            mol.sourceWallet = std::make_shared<Wallet>(source);
+            mol.remainderWallet = std::make_shared<Wallet>(remainder);
+            mol.initAuthorization(source, encrypt);
+            mol.sign(sec);
 
-        static const std::string PROPOSE_MOLECULE =
-            "mutation ProposeMolecule($molecule: MoleculeInput!) {"
-            " ProposeMolecule(molecule: $molecule) {"
-            " molecularHash status reason payload createdAt } }";
-        nlohmann::json variables;
-        variables["molecule"] = moleculeJson;
+            // Serialize + strip the validation-context wallets (the validator's MoleculeInput rejects
+            // unknown sourceWallet/remainderWallet fields — toJson emits them when set).
+            nlohmann::json moleculeJson = nlohmann::json::parse(mol.toJson());
+            moleculeJson.erase("sourceWallet");
+            moleculeJson.erase("remainderWallet");
 
-        log("INFO", "Requesting authorization token (molecular hash: " + mol.molecularHash + ")");
+            static const std::string PROPOSE_MOLECULE =
+                "mutation ProposeMolecule($molecule: MoleculeInput!) {"
+                " ProposeMolecule(molecule: $molecule) {"
+                " molecularHash status reason payload createdAt } }";
+            nlohmann::json variables;
+            variables["molecule"] = moleculeJson;
 
-        auto httpResp = pImpl_->httpClient->mutate(PROPOSE_MOLECULE, variables).get();
+            log("INFO", "Requesting authorization token (molecular hash: " + mol.molecularHash + ")");
 
-        auto result = std::make_unique<response::ResponseRequestAuthorization>();
-        if (!httpResp.isSuccess()) {
-            result->setError("Authorization request failed (HTTP " + std::to_string(httpResp.statusCode) + ")");
+            auto httpResp = pImpl_->httpClient->mutate(PROPOSE_MOLECULE, variables).get();
+
+            auto result = std::make_unique<response::ResponseRequestAuthorization>();
+            if (!httpResp.isSuccess()) {
+                result->setError("Authorization request failed (HTTP " + std::to_string(httpResp.statusCode) + ")");
+                return result;
+            }
+
+            nlohmann::json body = nlohmann::json::parse(httpResp.body);
+            result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
+
+            // Extract the JWT from data.ProposeMolecule.payload (a stringified JSON) -> token, and set
+            // it on the client + the http transport (so subsequent ops carry the X-Auth-Token header).
+            if (body.contains("data") && body["data"].contains("ProposeMolecule")) {
+                const auto& pm = body["data"]["ProposeMolecule"];
+                if (pm.contains("payload") && pm["payload"].is_string()) {
+                    try {
+                        nlohmann::json payload = nlohmann::json::parse(pm["payload"].get<std::string>());
+                        if (payload.contains("token") && payload["token"].is_string()) {
+                            const std::string jwt = payload["token"].get<std::string>();
+                            pImpl_->authToken = jwt;
+                            pImpl_->httpClient->setAuthToken(jwt);
+                        }
+                        // PQ-transport Phase E: plumb the validator's advertised ML-KEM pubkey (payload
+                        // "key") + the auth source wallet (its walletPubkey is what the validator
+                        // encrypts CipherHash responses to) into the transport, then set the session
+                        // encryption flag to match the requested mode.
+                        if (payload.contains("key") && payload["key"].is_string()) {
+                            pImpl_->httpClient->setCipherContext(
+                                std::make_shared<Wallet>(source), payload["key"].get<std::string>());
+                        }
+                        pImpl_->httpClient->setEncryption(encrypt);
+                    } catch (const std::exception&) {
+                        // payload not parseable (e.g. a rejected molecule) -> leave authToken unset
+                    }
+                }
+            }
+            return result;
+        };
+
+        // Genesis / no usable pointer: sign from a fresh AUTH wallet at a random position. The
+        // validator issues an unproven token for a bundle that already has a ContinuID pointer.
+        auto authorizeFromFreshAuthWallet = [&](const std::string& why) {
+            auto result = proposeAuthorization(Wallet(sec, "AUTH", "", 64, mlKem));
+            if (result->isAuthorized()) {
+                log("INFO", "Authorization token issued from a fresh AUTH wallet (" + why + ")");
+            }
+            return result;
+        };
+
+        // A returning user signs from the ContinuID pointer: the USER wallet the validator
+        // registered at the bundle's ContinuID position. Validator 0.5.0 marks the token proven only
+        // when atoms[0] sits at that position with that wallet's address (i_isotope.rs
+        // auth_bundle_proven). The token filter matters: without it the validator falls back to the
+        // newest wallet of ANY token when the bundle has no ContinuID meta. ContinuId is PUBLIC and
+        // bypasses the encrypted transport, so this works on a fresh, unauthenticated client.
+        const std::string bundle = getBundle();
+        auto continuId = queryContinuId(bundle).get();
+        const nlohmann::json continuIdData = continuId->getData();
+        if (continuId->getError().has_value()
+            || (continuIdData.is_object() && continuIdData.contains("errors"))) {
+            // A failed pointer query is returned as the authorization error, not guessed around.
+            auto failed = std::make_unique<response::ResponseRequestAuthorization>();
+            failed->setError(continuId->getError().has_value()
+                ? continuId->getError().value()
+                : "ContinuId query error: " + continuIdData["errors"].dump());
+            return failed;
+        }
+        const auto pointer = continuId->getContinuId();
+        const bool pointerIsUser = continuIdData.is_object() && continuIdData.contains("ContinuId")
+            && continuIdData["ContinuId"].is_object() && continuIdData["ContinuId"].contains("tokenSlug")
+            && continuIdData["ContinuId"]["tokenSlug"].is_string()
+            && continuIdData["ContinuId"]["tokenSlug"].get<std::string>() == "USER";
+        if (!pointer.has_value() || pointer->position.empty() || !pointerIsUser) {
+            return authorizeFromFreshAuthWallet("genesis: no USER ContinuID pointer");
+        }
+
+        Wallet pointerWallet(sec, "USER", pointer->position, 64, mlKem);
+        if (!pointer->walletAddress.empty() && pointer->walletAddress != pointerWallet.address) {
+            return authorizeFromFreshAuthWallet("the ContinuID pointer's address is not this secret's USER wallet");
+        }
+
+        auto result = proposeAuthorization(pointerWallet);
+        if (result->isAuthorized()) {
+            log("INFO", "Authorization token issued from the ContinuID pointer (USER wallet at position "
+                + pointer->position + ")");
             return result;
         }
 
-        nlohmann::json body = nlohmann::json::parse(httpResp.body);
-        result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
-
-        // Extract the JWT from data.ProposeMolecule.payload (a stringified JSON) -> token, and set
-        // it on the client + the http transport (so subsequent ops carry the X-Auth-Token header).
-        if (body.contains("data") && body["data"].contains("ProposeMolecule")) {
-            const auto& pm = body["data"]["ProposeMolecule"];
-            if (pm.contains("payload") && pm["payload"].is_string()) {
-                try {
-                    nlohmann::json payload = nlohmann::json::parse(pm["payload"].get<std::string>());
-                    if (payload.contains("token") && payload["token"].is_string()) {
-                        const std::string jwt = payload["token"].get<std::string>();
-                        pImpl_->authToken = jwt;
-                        pImpl_->httpClient->setAuthToken(jwt);
-                    }
-                    // PQ-transport Phase E: plumb the validator's advertised ML-KEM pubkey (payload
-                    // "key") + the AUTH source wallet (which decrypts CipherHash responses) into the
-                    // transport, then set the session encryption flag to match the requested mode.
-                    if (payload.contains("key") && payload["key"].is_string()) {
-                        pImpl_->httpClient->setCipherContext(
-                            std::make_shared<Wallet>(source), payload["key"].get<std::string>());
-                    }
-                    pImpl_->httpClient->setEncryption(encrypt);
-                } catch (const std::exception&) {
-                    // payload not parseable (e.g. a rejected molecule) -> leave authToken unset
-                }
-            }
+        // Only a validator rejection falls back; a transport failure is returned as it is. The
+        // fallback runs ONCE (testnet allows 3 auths/min/IP, so one login sends at most two
+        // authorization molecules) and its outcome, rejection included, is returned unchanged.
+        response::ResponseProposeMolecule verdict;
+        verdict.setData(result->getData());
+        if (result->getError().has_value() || verdict.getStatus().empty() || verdict.isAccepted()) {
+            return result;
         }
-        return result;
+        log("WARN", "Pointer-signed authorization rejected (" + verdict.getRejectionReason()
+            + "); falling back once to a fresh AUTH wallet");
+        return authorizeFromFreshAuthWallet("fallback after the pointer-signed login was rejected");
     });
 }
 
@@ -946,7 +1011,7 @@ bool KnishIOClient::isAuthenticated() const noexcept {
 
 void KnishIOClient::switchEncryption(bool encrypt) {
     // PQ-transport Phase E: toggle the encrypted transport on the active session. The cipher
-    // context (AUTH source wallet + validator pubkey) was plumbed during requestAuthToken.
+    // context (the auth source wallet + validator pubkey) was plumbed during requestAuthToken.
     pImpl_->httpClient->setEncryption(encrypt);
 }
 

@@ -26,6 +26,15 @@ substantiate a detail, the entry says so instead of guessing.
   Validator 0.5.0 and later reject the meta on every isotope. `SigningWalletForgery` is the
   regression test, on a fixture shared byte-for-byte by all eight SDKs.
 
+### Fixed
+
+- A returning user's login is now signed from the ContinuID pointer with the USER wallet
+  registered there, so validator 0.5.0 and later issue a proven token and the user keeps read
+  and subscription access to permissioned and private cells. `requestAuthToken()` queries
+  `ContinuId(bundle, token: USER)` first; a first login, or one with no usable pointer, is
+  unchanged. A rejected pointer-signed login falls back once to the previous unproven login, so
+  one call sends at most two authorization molecules. `ProvenRelogin` is the regression test.
+
 ## [1.2.1] — 2026-09-23
 
 ### Changed

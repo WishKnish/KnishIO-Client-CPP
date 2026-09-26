@@ -448,7 +448,8 @@ std::vector<Atom> Molecule::initMeta(const Wallet &wallet, const std::vector<std
  * validator extracts the pubkey from the U-atom's walletAddress and issues a bundle-scoped JWT
  * (U-isotope is OTS-exempt at the validator, but the molecular hash is still verified).
  *
- * @param {Wallet} sourceWallet - the signing (AUTH) wallet
+ * @param {Wallet} sourceWallet - the signing wallet: a fresh AUTH wallet, or the USER wallet at the
+ *        bundle's ContinuID pointer for a proven re-login
  * @param {bool} encrypt - whether the session requests encrypted communications
  */
 std::vector<Atom> Molecule::initAuthorization(const Wallet &sourceWallet, bool encrypt)
@@ -460,7 +461,7 @@ std::vector<Atom> Molecule::initAuthorization(const Wallet &sourceWallet, bool e
 	uMeta.push_back({"encrypt", encrypt ? "true" : "false"});
 	if (!sourceWallet.mlkem_public_key.empty()) {
 		uMeta.push_back({"pubkey", toBase64(sourceWallet.mlkem_public_key)});
-		// PQ-transport Phase E: convey the AUTH source wallet's ML-KEM public key as a SIGNED
+		// PQ-transport Phase E: convey the source wallet's ML-KEM public key as a SIGNED
 		// walletPubkey meta (this U-atom is signed → MITM-proof), so the validator's
 		// extract_enc_pubkey can encrypt CipherHash responses back to THIS wallet.
 		uMeta.push_back({"walletPubkey", toBase64(sourceWallet.mlkem_public_key)});

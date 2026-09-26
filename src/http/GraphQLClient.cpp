@@ -83,7 +83,7 @@ public:
     // PQ-transport (Phase E): ML-KEM CipherHash encrypted transport state.
     bool cipherEnabled = false;
     std::optional<std::string> serverPubKey;        // validator's advertised ML-KEM pubkey (base64)
-    std::shared_ptr<KnishIO::Wallet> cipherWallet;  // the AUTH source wallet that decrypts responses
+    std::shared_ptr<KnishIO::Wallet> cipherWallet;  // the auth source wallet that decrypts responses
 
     // Statistics
     mutable std::mutex statsMutex;

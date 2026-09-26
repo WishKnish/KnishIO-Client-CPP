@@ -321,6 +321,11 @@ public:
     
     /**
      * Request an authorization token
+     *
+     * A returning user (the bundle's ContinuId(token: USER) names a USER wallet this secret
+     * derives) signs from that ContinuID pointer, so the validator issues a proven token; a first
+     * login, or one with no usable pointer, signs from a fresh AUTH wallet. A rejected
+     * pointer-signed login falls back once to the AUTH wallet (at most two auth molecules).
      * @param secret Optional secret (uses client secret if not provided)
      * @param cellSlug Optional cell slug
      * @param encrypt Whether to encrypt the communication

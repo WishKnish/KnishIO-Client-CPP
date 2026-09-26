@@ -197,6 +197,30 @@ set_tests_properties(SigningWalletForgery PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:signing_wallet_forgery>
 )
 
+# A returning user's login must be signed from the ContinuID pointer with the USER wallet
+# registered there (validator 0.5.0 proven re-auth), falling back once to the AUTH path when that
+# is rejected. The client has no transport seam, so the test stubs the validator with a loopback
+# HTTP server and inspects the molecules the real requestAuthToken proposes. No network.
+add_executable(proven_relogin proven_relogin.cpp)
+target_link_libraries(proven_relogin
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(proven_relogin PRIVATE cxx_std_20)
+set_target_properties(proven_relogin PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME ProvenRelogin
+    COMMAND proven_relogin
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(ProvenRelogin PROPERTIES
+    LABELS "auth;continuid;unit"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:proven_relogin>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage
