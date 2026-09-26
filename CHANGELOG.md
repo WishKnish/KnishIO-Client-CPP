@@ -14,6 +14,18 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [Unreleased]
+
+### Security
+
+- `Molecule::verifyOts()` no longer honours a `signingWallet` meta on atoms[0]: it compares the
+  address recovered from the one-time signature with atoms[0]'s `walletAddress` only. Since 1.2.1
+  a molecule that claimed one wallet's address, carried another wallet's signature and named that
+  signer in the meta passed `Molecule::verify()`, so an offline verifier using it (as knishproof
+  does with the TS and Rust SDKs) reported it valid and attributed it to the claimed wallet.
+  Validator 0.5.0 and later reject the meta on every isotope. `SigningWalletForgery` is the
+  regression test, on a fixture shared byte-for-byte by all eight SDKs.
+
 ## [1.2.1] — 2026-09-23
 
 ### Changed

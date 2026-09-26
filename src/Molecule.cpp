@@ -941,29 +941,11 @@ bool Molecule::verifyOts(const Molecule &molecule)
 	// Squeeze the sponge to retrieve a 128 byte (64 character) string that should match the sender�s wallet address
 	auto address = shake256Hex(digest, 256);
 
-	// Signing address is atoms[0].walletAddress unless atoms[0] carries a `signingWallet` meta
-	// (a JSON object with `address`) — the same override the JS reference (CheckMolecule.js:676-687)
-	// and the Rust validator honour for server-signed local molecules. A malformed override falls
-	// back to walletAddress, as the Rust validator does.
-	std::string signingAddress = molecule.atoms.front().walletAddress;
-
-	for (const auto &kv : molecule.atoms.front().meta)
-	{
-		if (kv.first != "signingWallet") continue;
-
-		try {
-			auto signingWallet = nlohmann::json::parse(kv.second);
-
-			if (signingWallet.contains("address") && signingWallet["address"].is_string())
-			{
-				signingAddress = signingWallet["address"].get<std::string>();
-			}
-		} catch (const std::exception&) { /* keep walletAddress */ }
-
-		break;
-	}
-
-	return (address == signingAddress);
+	// The signing address is atoms[0].walletAddress, and nothing else: no meta may redirect it.
+	// Honouring an address from atoms[0] meta would let a molecule claim one wallet's address
+	// while carrying another wallet's signature. The Rust validator (0.5.0+) rejects such a meta
+	// outright; the C, Python and Kotlin SDKs never honoured it.
+	return (address == molecule.atoms.front().walletAddress);
 }
 
 /**

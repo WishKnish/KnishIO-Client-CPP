@@ -170,6 +170,33 @@ set_tests_properties(WotsSignatureParity PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:wots_signature_parity>
 )
 
+# The OTS check compares the recovered address with atoms[0].walletAddress only. The shared
+# cross-SDK forgery fixture (built by JS 1.2.1) carries a molecule that claims a victim's
+# address, is signed by another wallet, and names that signer in a `signingWallet` meta: it must
+# fail verification. Fixture path is baked in, beside this file.
+add_executable(signing_wallet_forgery signing_wallet_forgery.cpp)
+target_link_libraries(signing_wallet_forgery
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(signing_wallet_forgery PRIVATE cxx_std_20)
+target_compile_definitions(signing_wallet_forgery PRIVATE
+    KNISHIO_FORGERY_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/signing-wallet-forgery.json"
+)
+set_target_properties(signing_wallet_forgery PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME SigningWalletForgery
+    COMMAND signing_wallet_forgery
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(SigningWalletForgery PROPERTIES
+    LABELS "crypto;signature;security"
+    TIMEOUT 60
+    REQUIRED_FILES $<TARGET_FILE:signing_wallet_forgery>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage
