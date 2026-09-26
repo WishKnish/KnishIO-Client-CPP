@@ -14,7 +14,16 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
-## [Unreleased]
+## [1.2.2] — 2026-09-26
+
+### Fixed
+
+- A returning user's login is now signed from the ContinuID pointer with the USER wallet
+  registered there, so validator 0.5.0 and later issue a proven token and the user keeps read
+  and subscription access to permissioned and private cells. `requestAuthToken()` queries
+  `ContinuId(bundle, token: USER)` first; a first login, or one with no usable pointer, is
+  unchanged. A rejected pointer-signed login falls back once to the previous unproven login, so
+  one call sends at most two authorization molecules. `ProvenRelogin` is the regression test.
 
 ### Security
 
@@ -26,14 +35,10 @@ substantiate a detail, the entry says so instead of guessing.
   Validator 0.5.0 and later reject the meta on every isotope. `SigningWalletForgery` is the
   regression test, on a fixture shared byte-for-byte by all eight SDKs.
 
-### Fixed
+### Notes
 
-- A returning user's login is now signed from the ContinuID pointer with the USER wallet
-  registered there, so validator 0.5.0 and later issue a proven token and the user keeps read
-  and subscription access to permissioned and private cells. `requestAuthToken()` queries
-  `ContinuId(bundle, token: USER)` first; a first login, or one with no usable pointer, is
-  unchanged. A rejected pointer-signed login falls back once to the previous unproven login, so
-  one call sends at most two authorization molecules. `ProvenRelogin` is the regression test.
+- Tests only: test: count only peers that pass, and report what the self-test did not check (612b3a3).
+- Tests only: test: default-initialize the self-test result members GCC and clang flagged (888a029).
 
 ## [1.2.1] — 2026-09-23
 
@@ -324,7 +329,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.1...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.2...HEAD
+[1.2.2]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.2
 [1.2.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.1
 [1.2.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.0
 [1.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.1.0
