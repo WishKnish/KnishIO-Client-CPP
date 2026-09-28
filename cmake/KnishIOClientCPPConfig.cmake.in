@@ -5,22 +5,23 @@
 #
 # Usage:
 #   find_package(KnishIOClientCPP REQUIRED)
-#   target_link_libraries(your_target KnishIO::ClientCPP)
+#   target_link_libraries(your_target KnishIO::ClientCPP)        # shared library
+#   target_link_libraries(your_target KnishIO::ClientCPPStatic)  # static library
+#
+# Both targets put include/ and include/knishio/ on the include path, so
+# #include <knishio/KnishIOClient.h> and #include "KnishIOClient.h" both work.
 #
 
 @PACKAGE_INIT@
 
-# Dependencies
+# Dependencies: the exported targets link PkgConfig::SODIUM, OpenSSL::Crypto,
+# CURL::libcurl and Threads::Threads, so each must exist before the targets load.
 include(CMakeFindDependencyMacro)
-
-# Find libsodium
-find_dependency(PkgConfig REQUIRED)
-pkg_check_modules(SODIUM REQUIRED libsodium)
-
-# Optional dependencies
-if(@KNISHIO_HTTP_SUPPORT@)
-    find_dependency(CURL REQUIRED)
-endif()
+find_dependency(PkgConfig)
+pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+find_dependency(OpenSSL)
+find_dependency(CURL)
+find_dependency(Threads)
 
 # Include targets
 if(NOT TARGET KnishIO::ClientCPP)
@@ -44,7 +45,7 @@ if(NOT KnishIOClientCPP_FIND_QUIETLY)
     message(STATUS "Found KnishIO Client C++ SDK: ${KnishIOClientCPP_VERSION}")
     message(STATUS "  Available targets:")
     message(STATUS "    KnishIO::ClientCPP (shared library)")
-    message(STATUS "    KnishIO::ClientCPP::Static (static library)")
+    message(STATUS "    KnishIO::ClientCPPStatic (static library)")
     if(KnishIOClientCPP_HTTP_SUPPORT)
         message(STATUS "  HTTP client support: enabled")
     else()

@@ -80,6 +80,17 @@ jobs:
       - name: Unit tests (ctest)
         run: ctest --test-dir build --output-on-failure
 
+      # The release package's consumer gate on every push, not only at release time: install
+      # this build to a stage, then prove from a relocated copy that every installed header
+      # compiles on its own, plain -I/-L works, and find_package(KnishIOClientCPP) links both
+      # KnishIO::ClientCPP and KnishIO::ClientCPPStatic (publish.yml runs the same script).
+      - name: 'Consumer build gate (installed package: headers, -I/-L, find_package)'
+        run: |
+          set -euo pipefail
+          cmake --install build --prefix "$RUNNER_TEMP/stage/pkg"
+          bash packaging/check-release-package.sh "$RUNNER_TEMP/stage/pkg" \
+            "$(sed -n '/^project(/,/)/s/^ *VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+
       # The cycle-114 lint gate (clang-tidy bugprone-*/performance-*, WarningsAsErrors).
       # Last so a clang-tidy version-drift failure is clearly isolated after build + self-test pass.
       - name: clang-tidy (lint gate)

@@ -136,37 +136,6 @@ set(KNISHIO_SOURCES
     ${MLKEM_NATIVE_SOURCES}
 )
 
-# Header files
-set(KNISHIO_HEADERS
-    src/Atom.h
-    src/Molecule.h
-    src/Wallet.h
-    src/crypto.h
-    src/crypto_bigint.h
-    src/utility.h
-    src/KnishIOClient.h
-    src/AtomsNotFoundException.h
-    src/exception/KnishIOException.h
-    include/http/GraphQLClient.h
-    include/response/Response.h
-    include/query/Query.h
-    include/query/QueryBalance.h
-    include/mutation/Mutation.h
-    src/third_party/BigInt/bigInt.h
-    src/third_party/Keccak/Keccak.h
-    src/third_party/nlohmann/json.hpp
-    src/storage/SecretStorageException.h
-    src/storage/SecureMemory.h
-    src/storage/StorageBackend.h
-    src/storage/SecretEnvelope.h
-    src/storage/SecretStorageProvider.h
-    include/storage/SecretStorageException.h
-    include/storage/SecureMemory.h
-    include/storage/StorageBackend.h
-    include/storage/SecretEnvelope.h
-    include/storage/SecretStorageProvider.h
-)
-
 # Create the main library (SHARED — the VERSION/SOVERSION properties below imply a .dylib;
 # the SHARED keyword was previously omitted, so it silently built a static .a. The explicit
 # static variant is knishio-client-cpp-static below.)
@@ -176,9 +145,8 @@ add_library(knishio-client-cpp SHARED ${KNISHIO_SOURCES})
 set_target_properties(knishio-client-cpp PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
-    PUBLIC_HEADER "${KNISHIO_HEADERS}"
     OUTPUT_NAME "knishio-client-cpp"
-    EXPORT_NAME "KnishIOClientCPP"
+    EXPORT_NAME "ClientCPP"
 )
 
 # Target compile features
@@ -209,6 +177,7 @@ target_include_directories(knishio-client-cpp
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/third_party>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:include>
+        $<INSTALL_INTERFACE:include/knishio>
 )
 
 # HTTP client support (optional - only if source file exists)
@@ -226,7 +195,7 @@ endif()
 add_library(knishio-client-cpp-static STATIC ${KNISHIO_SOURCES})
 set_target_properties(knishio-client-cpp-static PROPERTIES
     OUTPUT_NAME "knishio-client-cpp-static"
-    PUBLIC_HEADER "${KNISHIO_HEADERS}"
+    EXPORT_NAME "ClientCPPStatic"
 )
 target_compile_features(knishio-client-cpp-static PUBLIC cxx_std_20)
 
@@ -251,6 +220,7 @@ target_include_directories(knishio-client-cpp-static
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/third_party>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:include>
+        $<INSTALL_INTERFACE:include/knishio>
 )
 
 if(KNISHIO_HTTP_SUPPORT AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/http_client.cpp")
@@ -261,7 +231,7 @@ endif()
 
 # Create alias targets
 add_library(KnishIO::ClientCPP ALIAS knishio-client-cpp)
-add_library(KnishIO::ClientCPP::Static ALIAS knishio-client-cpp-static)
+add_library(KnishIO::ClientCPPStatic ALIAS knishio-client-cpp-static)
 
 # Testing support
 option(KNISHIO_BUILD_TESTS "Build KnishIO tests" ON)
@@ -309,7 +279,48 @@ install(TARGETS knishio-client-cpp knishio-client-cpp-static
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio
+)
+
+# Install the public headers as a tree that mirrors how they include each other. The
+# top-level headers sit in include/knishio/ and include "TokenUnit.h" as a sibling; the rest
+# include "exception/…", "storage/…", "query/…" and "third_party/…" relative to
+# include/knishio, which the exported targets put on the include path next to include/.
+# include/storage/*.h are in-tree "../../src/storage/…" wrappers and are not installed: the
+# real src/storage headers are.
+install(FILES
+    src/Atom.h
+    src/AtomsNotFoundException.h
+    src/KnishIOClient.h
+    src/Molecule.h
+    src/TokenUnit.h
+    src/Wallet.h
+    src/crypto.h
+    src/crypto_bigint.h
+    src/utility.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio
+)
+install(FILES src/exception/KnishIOException.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio/exception
+)
+install(FILES
+    src/storage/SecretEnvelope.h
+    src/storage/SecretStorageException.h
+    src/storage/SecretStorageProvider.h
+    src/storage/SecureMemory.h
+    src/storage/StorageBackend.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio/storage
+)
+install(FILES include/http/GraphQLClient.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio/http
+)
+install(FILES include/response/Response.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio/response
+)
+install(FILES include/query/Query.h include/query/QueryBalance.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio/query
+)
+install(FILES include/mutation/Mutation.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/knishio/mutation
 )
 
 # Install third-party headers
