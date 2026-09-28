@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "Atom.h"
+#include "TokenUnit.h"
 
 namespace KnishIO {
 
@@ -34,10 +35,21 @@ public:
 	// V-only sum when a B/F atom is present). tradeRates serialize into the buffer atom meta only when
 	// non-empty (JS AtomMeta.setAtomWallet parity); empty -> hash-neutral.
 	std::vector<Atom> initDepositBuffer(const Wallet &sourceWallet, const Wallet &bufferWallet, const Wallet &remainderWallet, const std::string &amount, const std::vector<std::pair<std::string, std::string>> &tradeRates = {});
-	// Withdraw: B (source -balance) -> N x V (recipient shadow +amount) -> B (remainder +(balance-Σ)).
+	// Withdraw: B (source -balance) -> N x V (recipient +amount) -> B (remainder +(balance-Σ)).
 	// recipientWallets is parallel to amounts; full-balance debit (JS parity) conserves for partial
-	// withdraws too: -balance + Σamounts + (balance-Σ) == 0.
+	// withdraws too: -balance + Σamounts + (balance-Σ) == 0. The remainder MUST be a fresh position
+	// (validator 0.6.1 rejects value credited to the consumed signing position). The source B atom
+	// carries the source's tokenUnits meta only when it has units.
 	std::vector<Atom> initWithdrawBuffer(const Wallet &sourceWallet, const std::vector<Wallet> &recipientWallets, const std::vector<std::string> &amounts, const Wallet &remainderWallet);
+	// Replenish (contract 9.1): C (token, action=add, value amount or unit count) + ContinuID I atom.
+	// Signed by the identity's USER wallet like initTokenCreation; creditedWallet is the identity's
+	// existing wallet for the token (or a fresh one). units non-empty = stackable / non-fungible:
+	// the C value is the unit count and the new units ride as tokenUnits triples.
+	std::vector<Atom> initTokenReplenish(const Wallet &sourceWallet, const Wallet &creditedWallet, const std::string &amount, const std::vector<TokenUnit> &units = {});
+	// Stackable fusion (contract 9.2): V (source -B, the fused units), V (burn +(M-1)), F (recipient +1,
+	// the new unit N), V (remainder +(B-M), the kept units). No ContinuID atom. fusedTokenUnitIds are in
+	// caller order and must name >= 2 units of sourceWallet; newTokenUnitId must not exist in it.
+	std::vector<Atom> initTokenFusion(const Wallet &sourceWallet, const Wallet &recipientWallet, const Wallet &remainderWallet, const std::vector<std::string> &fusedTokenUnitIds, const std::string &newTokenUnitId);
 	std::vector<Atom> initAuthorization(const Wallet &sourceWallet, bool encrypt = false);
 
 	// compressed mirrors JS Molecule.sign({ compressed = true }) and the C SDK's
@@ -58,6 +70,13 @@ public:
 	static bool verifyMolecularHash(const Molecule &molecule);
 	static bool verifyOts(const Molecule &molecule);
 	static bool verifyTokenIsotopeV(const Molecule &molecule);
+	// JS CheckMolecule.continuId: a molecule signed by a USER wallet (atoms[0].token == "USER") must
+	// carry a ContinuID (I) atom. Part of check(), not verify(); the validator's Tier 1 enforces it too.
+	static bool verifyContinuId(const Molecule &molecule);
+	// Pre-submit check (contract 9.7) of a signed molecule: throws AtomsNotFoundException when the
+	// molecule has no atoms or lacks its ContinuID atom (JS AtomsMissingException), and
+	// std::runtime_error when hash, conservation or one-time signature do not verify.
+	static void check(const Molecule &molecule);
 	// Conservation + meta-shape validation for B/F (buffer-family) molecules. Mirrors
 	// isotopeB()/isotopeF() in the JS reference; verifyTokenIsotopeV() delegates to this
 	// when it skips the V-only sum, so that the skip is not an unconditional accept.

@@ -9,6 +9,7 @@
 #include "Wallet.h"
 #include "utility.h"
 #include "AtomsNotFoundException.h"
+#include "exception/KnishIOException.h"
 #include "third_party/nlohmann/json.hpp"
 
 using namespace std::chrono;
@@ -56,6 +57,38 @@ std::vector<std::pair<std::string, std::string>> buildWalletMetaKeys(const Walle
 	}
 	walletMeta.push_back({"walletCharacters", "BASE64"});
 	return walletMeta;
+}
+
+// The all-zeros bundle a burn credits (validator v_isotope.rs ZERO_BUNDLE).
+constexpr const char *ZERO_BUNDLE = "0000000000000000000000000000000000000000000000000000000000000000";
+
+// One unit in the canonical wire form [id, name, metas] (JS TokenUnit.toData()).
+nlohmann::json unitTriple(const TokenUnit &unit)
+{
+	nlohmann::json metas = nlohmann::json::object();
+	for (const auto &kv : unit.metas) {
+		metas[kv.first] = kv.second;
+	}
+	return nlohmann::json::array({unit.id, unit.name, metas});
+}
+
+// A unit list as the compact tokenUnits meta value [[id, name, metas], ...] (JSON.stringify form).
+std::string unitsJson(const std::vector<TokenUnit> &units)
+{
+	nlohmann::json arr = nlohmann::json::array();
+	for (const auto &unit : units) {
+		arr.push_back(unitTriple(unit));
+	}
+	return arr.dump();
+}
+
+// tokenUnits meta for a unit list; JS AtomMeta.setAtomWallet omits it when the list is empty.
+std::vector<std::pair<std::string, std::string>> unitsMeta(const std::vector<TokenUnit> &units)
+{
+	if (units.empty()) {
+		return {};
+	}
+	return {{"tokenUnits", unitsJson(units)}};
 }
 
 } // anonymous namespace
@@ -305,6 +338,7 @@ std::vector<Atom> Molecule::initWithdrawBuffer(const Wallet &sourceWallet, const
 	int index = 0;
 
 	// B atom: debit the FULL balance from the source (buffer) wallet. metaType walletBundle -> source bundle.
+	// A stackable buffer carries its units (JS setAtomWallet; empty for fungible -> no meta).
 	this->atoms.push_back
 	(
 		Atom(sourceWallet.position,
@@ -315,7 +349,7 @@ std::vector<Atom> Molecule::initWithdrawBuffer(const Wallet &sourceWallet, const
 			sourceWallet.batchId,
 			"walletBundle",
 			sourceWallet.bundle,
-			{},
+			unitsMeta(sourceWallet.tokenUnits),
 			"",
 			index++)
 	);
@@ -403,6 +437,130 @@ std::vector<Atom> Molecule::initTokenCreation(const Wallet &sourceWallet, const 
 
 	// ContinuID atom (I isotope), mirroring JS addContinuIdAtom() — was missing (1-atom molecule).
 	this->addContinuIdAtom(sourceWallet, 1);
+
+	return this->atoms;
+}
+
+/**
+ * Replenish an existing token (contract 9.1): a token C atom with meta action=add, signed by the USER
+ * wallet exactly like initTokenCreation, followed by the ContinuID atom. Metas, in this order: action,
+ * address / position / pubkey of the credited wallet, batchId when the credited wallet has one, and
+ * tokenUnits (triples) when new units are minted. The atom's batchId is the credited wallet's, as in
+ * JS initTokenCreation.
+ *
+ * @param sourceWallet   the signing USER wallet (at the ContinuID pointer)
+ * @param creditedWallet the identity's wallet for the token that receives the new supply
+ * @param amount         the supply to add (fungible); ignored when units are given
+ * @param units          new stackable / non-fungible units; the C value is then their count
+ */
+std::vector<Atom> Molecule::initTokenReplenish(const Wallet &sourceWallet, const Wallet &creditedWallet, const std::string &amount, const std::vector<TokenUnit> &units)
+{
+	this->molecularHash.clear();
+
+	std::vector<std::pair<std::string, std::string>> meta;
+	meta.push_back({"action", "add"});
+	meta.push_back({"address", creditedWallet.address});
+	meta.push_back({"position", creditedWallet.position});
+	if (!creditedWallet.mlkem_public_key.empty()) {
+		meta.push_back({"pubkey", toBase64(creditedWallet.mlkem_public_key)});
+	}
+	if (!creditedWallet.batchId.empty()) {
+		meta.push_back({"batchId", creditedWallet.batchId});
+	}
+	const auto tokenUnits = unitsMeta(units);
+	meta.insert(meta.end(), tokenUnits.begin(), tokenUnits.end());
+
+	this->atoms.push_back
+	(
+		Atom(sourceWallet.position,
+			sourceWallet.address,
+			"C",
+			sourceWallet.token,
+			units.empty() ? amount : std::to_string(units.size()),
+			creditedWallet.batchId,
+			"token",
+			creditedWallet.token,
+			meta,
+			"",
+			0)
+	);
+
+	this->addContinuIdAtom(sourceWallet, 1);
+
+	return this->atoms;
+}
+
+/**
+ * Stackable fusion (contract 9.2). Fuses M >= 2 units of sourceWallet (balance B) into ONE new unit N
+ * delivered to recipientWallet:
+ *   0 V source    -B      tokenUnits = the M fused units, source order (the SENT set)
+ *   1 V burn      +(M-1)  walletBundle -> ZERO_BUNDLE, tokenUnits = fused ids except the last, caller order
+ *   2 F recipient +1      walletBundle -> recipient bundle, tokenUnits = [N],
+ *                         N = [id, id, {"fusedTokenUnits": <all M fused triples, caller order>}]
+ *   3 V remainder +(B-M)  walletBundle -> sender bundle, tokenUnits = the kept units, source order
+ * No ContinuID atom (the source signs at its own position, like transfer/burn). When the source has a
+ * batchId the remainder keeps it and the burn and F atoms each get a fresh one (JS initBatchId).
+ */
+std::vector<Atom> Molecule::initTokenFusion(const Wallet &sourceWallet, const Wallet &recipientWallet, const Wallet &remainderWallet, const std::vector<std::string> &fusedTokenUnitIds, const std::string &newTokenUnitId)
+{
+	if (fusedTokenUnitIds.size() < 2) {
+		throw knishio::KnishIOException("Token fusion requires at least two token units");
+	}
+
+	// The fused units in caller order, resolved against the source wallet.
+	std::vector<TokenUnit> fused;
+	fused.reserve(fusedTokenUnitIds.size());
+	for (const auto &id : fusedTokenUnitIds) {
+		auto unit = std::find_if(sourceWallet.tokenUnits.begin(), sourceWallet.tokenUnits.end(),
+			[&id](const TokenUnit &u) { return u.id == id; });
+		if (unit == sourceWallet.tokenUnits.end()) {
+			throw knishio::KnishIOException("Token unit '" + id + "' not found in the source wallet");
+		}
+		fused.push_back(*unit);
+	}
+	if (std::any_of(sourceWallet.tokenUnits.begin(), sourceWallet.tokenUnits.end(),
+		[&newTokenUnitId](const TokenUnit &u) { return u.id == newTokenUnitId; })) {
+		throw knishio::KnishIOException("Token fusion unit id already exists in the source wallet");
+	}
+
+	// SENT (source order) and KEPT (source order).
+	auto isFused = [&fusedTokenUnitIds](const TokenUnit &u) {
+		return std::find(fusedTokenUnitIds.begin(), fusedTokenUnitIds.end(), u.id) != fusedTokenUnitIds.end();
+	};
+	std::vector<TokenUnit> sent;
+	std::vector<TokenUnit> kept;
+	for (const auto &unit : sourceWallet.tokenUnits) {
+		(isFused(unit) ? sent : kept).push_back(unit);
+	}
+	const std::vector<TokenUnit> burned(fused.begin(), fused.end() - 1);
+
+	nlohmann::json fusedTriples = nlohmann::json::array();
+	for (const auto &unit : fused) {
+		fusedTriples.push_back(unitTriple(unit));
+	}
+	nlohmann::json newUnit = nlohmann::json::array({newTokenUnitId, newTokenUnitId,
+		nlohmann::json{{"fusedTokenUnits", fusedTriples}}});
+	const std::string newUnitJson = nlohmann::json::array({newUnit}).dump();
+
+	const long long balance = std::stoll(sourceWallet.balance);
+	const long long fusedCount = static_cast<long long>(fused.size());
+	const bool batched = !sourceWallet.batchId.empty();
+	auto freshBatchId = [batched]() { return batched ? randomString(64) : std::string(); };
+
+	this->molecularHash.clear();
+
+	this->atoms.push_back(Atom(sourceWallet.position, sourceWallet.address, "V", sourceWallet.token,
+		"-" + sourceWallet.balance, sourceWallet.batchId, "", "", unitsMeta(sent), "", 0));
+
+	this->atoms.push_back(Atom("", "", "V", sourceWallet.token,
+		std::to_string(fusedCount - 1), freshBatchId(), "walletBundle", ZERO_BUNDLE, unitsMeta(burned), "", 1));
+
+	this->atoms.push_back(Atom(recipientWallet.position, recipientWallet.address, "F", sourceWallet.token,
+		"1", freshBatchId(), "walletBundle", recipientWallet.bundle, {{"tokenUnits", newUnitJson}}, "", 2));
+
+	this->atoms.push_back(Atom(remainderWallet.position, remainderWallet.address, "V", sourceWallet.token,
+		std::to_string(balance - fusedCount), sourceWallet.batchId, "walletBundle", sourceWallet.bundle,
+		unitsMeta(kept), "", 3));
 
 	return this->atoms;
 }
@@ -859,6 +1017,28 @@ bool Molecule::verify(const Molecule &molecule)
 	}
 
 	return hashValid && tokenValid && otsValid;
+}
+
+bool Molecule::verifyContinuId(const Molecule &molecule)
+{
+	if (molecule.atoms.empty() || molecule.atoms.front().token != "USER") {
+		return true;
+	}
+	return std::any_of(molecule.atoms.begin(), molecule.atoms.end(),
+		[](const Atom &a) { return a.isotope == "I"; });
+}
+
+void Molecule::check(const Molecule &molecule)
+{
+	if (molecule.atoms.empty()) {
+		throw AtomsNotFoundException();
+	}
+	if (!verifyContinuId(molecule)) {
+		throw AtomsNotFoundException("Check::continuId() - Molecule is missing required ContinuID Atom!");
+	}
+	if (!verify(molecule)) {
+		throw std::runtime_error("Molecule validation failed");
+	}
 }
 
 /**

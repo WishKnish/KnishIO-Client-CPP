@@ -878,8 +878,9 @@ private:
             recipient.bundle = source.bundle;
             recipient.address = "";
             recipient.position = "";
-            mol.remainderWallet = std::make_shared<Wallet>(source);
-            mol.initWithdrawBuffer(source, {recipient}, {amount}, source);
+            Wallet remainder(secret, token);   // fresh position (contract 9.6)
+            mol.remainderWallet = std::make_shared<Wallet>(remainder);
+            mol.initWithdrawBuffer(source, {recipient}, {amount}, remainder);
         } else {
             throw std::runtime_error("unknown buildFrom '" + buildFrom + "'");
         }
@@ -929,7 +930,7 @@ private:
     // (the hasCrossIsotope bypass — V-only atoms don't sum to 0). Molecular hashes are NOT frozen
     // (random positions). Reads the vendored fixture; SKIPS if absent (standalone CI).
     bool testBufferFamily() {
-        Logger::message("\nB1. Buffer Family Test (deposit + withdraw, vector-driven)", colors::BLUE);
+        Logger::message("\nB1. Buffer Family Test (deposit, withdraw, fusion, replenish; vector-driven)", colors::BLUE);
 
         try {
             std::vector<std::string> candidates;
@@ -1003,17 +1004,18 @@ private:
                 const std::string balance = std::to_string(tv.at("sourceBalance").get<long long>());
                 const std::string amount = std::to_string(tv.at("amount").get<long long>());
 
-                Wallet source(secret, token);   // the buffer wallet: B-isotope source AND remainder
+                Wallet source(secret, token);   // the buffer wallet (B-isotope source)
                 source.balance = balance;
                 Wallet recipient(secret, token); // shadow: caller's own bundle, no position/address
                 recipient.bundle = source.bundle;
                 recipient.address = "";
                 recipient.position = "";
+                Wallet remainder(secret, token); // fresh remainder position (contract 9.6)
 
                 Molecule mol;
                 mol.sourceWallet = std::make_shared<Wallet>(source);
-                mol.remainderWallet = std::make_shared<Wallet>(source);
-                mol.initWithdrawBuffer(source, {recipient}, {amount}, source);
+                mol.remainderWallet = std::make_shared<Wallet>(remainder);
+                mol.initWithdrawBuffer(source, {recipient}, {amount}, remainder);
                 setFixedTimestamps(mol);
                 mol.sign(secret, false);
 
@@ -1025,6 +1027,144 @@ private:
                     && mol.atoms[2].isotope == "B" && mol.atoms[2].value == tv.at("expectedRemainderValue").get<std::string>();
                 bool ok = shape && std::to_string(sum) == tv.at("expectedSum").get<std::string>() && Molecule::verify(mol);
                 Logger::test("withdraw " + name + " conserves (B+V sum 0; cross-isotope bypass)", ok);
+                all_pass = all_pass && ok;
+                last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
+            }
+
+            // ---- Phase B vectors (validator 0.6.x): each built molecule must also pass Molecule::check,
+            // the pre-submit check every client operation runs. ----
+            auto passesCheck = [](const Molecule& m) {
+                try { Molecule::check(m); return true; } catch (const std::exception&) { return false; }
+            };
+            auto unitIdsOf = [](const Atom& a) {
+                std::vector<std::string> ids;   // absent tokenUnits meta == [] (JS omits an empty list)
+                for (const auto& kv : a.meta) {
+                    if (kv.first == "tokenUnits") {
+                        for (const auto& u : json::parse(kv.second)) ids.push_back(u.at(0).get<std::string>());
+                    }
+                }
+                return ids;
+            };
+            auto metaValue = [](const Atom& a, const std::string& key) -> std::optional<std::string> {
+                for (const auto& kv : a.meta) if (kv.first == key) return kv.second;
+                return std::nullopt;
+            };
+            auto sumOf = [](const Molecule& m) {
+                long long s = 0;
+                for (const auto& a : m.atoms) if (a.isotope == "V" || a.isotope == "B" || a.isotope == "F") s += std::stoll(a.value);
+                return s;
+            };
+
+            // WITHDRAW, fresh remainder: B (S -balance) -> V (+amount) -> B (fresh remainder +(balance-amount))
+            for (const auto& tv : v.at("buffer_withdraw_fresh_remainder").at("tests")) {
+                const std::string name = tv.at("name").get<std::string>();
+                Wallet source(secret, token);
+                source.balance = std::to_string(tv.at("sourceBalance").get<long long>());
+                Wallet recipient(secret, token);
+                recipient.address = "";
+                recipient.position = "";
+                Wallet remainder(secret, token);
+                Molecule mol;
+                mol.sourceWallet = std::make_shared<Wallet>(source);
+                mol.remainderWallet = std::make_shared<Wallet>(remainder);
+                mol.initWithdrawBuffer(source, {recipient}, {std::to_string(tv.at("amount").get<long long>())}, remainder);
+                setFixedTimestamps(mol);
+                mol.sign(secret, false);
+                std::vector<std::string> isotopes;
+                for (const auto& a : mol.atoms) isotopes.push_back(a.isotope);
+                bool ok = isotopes == tv.at("expectedIsotopes").get<std::vector<std::string>>()
+                    && mol.atoms[0].value == tv.at("expectedSourceValue").get<std::string>()
+                    && mol.atoms[1].value == tv.at("expectedRecipientValue").get<std::string>()
+                    && mol.atoms[2].value == tv.at("expectedRemainderValue").get<std::string>()
+                    && std::to_string(sumOf(mol)) == tv.at("expectedSum").get<std::string>()
+                    && (mol.atoms[2].position != mol.atoms[0].position) == tv.at("expectedRemainderPositionDistinctFromSource").get<bool>()
+                    && passesCheck(mol);
+                Logger::test("withdraw " + name + " (fresh remainder position, check passes)", ok);
+                all_pass = all_pass && ok;
+                last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
+            }
+
+            // FUSION: V (S -B, fused units) -> V (burn +(M-1)) -> F (recipient +1, [N]) -> V (remainder +(B-M))
+            for (const auto& tv : v.at("stackable_fusion_conservation").at("tests")) {
+                const std::string name = tv.at("name").get<std::string>();
+                const auto sourceIds = tv.at("sourceUnits").get<std::vector<std::string>>();
+                const auto fuse = tv.at("fuse").get<std::vector<std::string>>();
+                const std::string newId = tv.at("newUnitId").get<std::string>();
+                Wallet source(secret, "FUSETOK");
+                source.balance = std::to_string(sourceIds.size());
+                for (const auto& id : sourceIds) source.tokenUnits.push_back({id, id, {}});
+                Wallet recipient(secret, "FUSETOK");
+                Wallet remainder(secret, "FUSETOK");
+                Molecule mol;
+                mol.sourceWallet = std::make_shared<Wallet>(source);
+                mol.remainderWallet = std::make_shared<Wallet>(remainder);
+                if (tv.value("mustReject", false)) {
+                    std::string error;
+                    try { mol.initTokenFusion(source, recipient, remainder, fuse, newId); } catch (const std::exception& e) { error = e.what(); }
+                    bool ok = error.find(tv.at("expectedErrorContains").get<std::string>()) != std::string::npos;
+                    Logger::test("fusion " + name + " rejected client-side", ok);
+                    all_pass = all_pass && ok;
+                    continue;
+                }
+                mol.initTokenFusion(source, recipient, remainder, fuse, newId);
+                setFixedTimestamps(mol);
+                mol.sign(secret, false);
+                std::vector<std::string> isotopes;
+                for (const auto& a : mol.atoms) isotopes.push_back(a.isotope);
+                std::vector<std::string> fusedIds;
+                if (auto n = metaValue(mol.atoms.at(2), "tokenUnits")) {
+                    const json nUnits = json::parse(*n);
+                    if (nUnits.size() == 1 && nUnits[0].at(0) == newId) {
+                        for (const auto& u : nUnits[0].at(2).at("fusedTokenUnits")) fusedIds.push_back(u.at(0).get<std::string>());
+                    }
+                }
+                bool ok = isotopes == tv.at("expectedIsotopes").get<std::vector<std::string>>()
+                    && mol.atoms[0].value == tv.at("expectedSourceValue").get<std::string>()
+                    && mol.atoms[1].value == tv.at("expectedBurnValue").get<std::string>()
+                    && mol.atoms[2].value == tv.at("expectedFusionValue").get<std::string>()
+                    && mol.atoms[3].value == tv.at("expectedRemainderValue").get<std::string>()
+                    && unitIdsOf(mol.atoms[0]) == tv.at("expectedSourceUnitIds").get<std::vector<std::string>>()
+                    && unitIdsOf(mol.atoms[1]) == tv.at("expectedBurnUnitIds").get<std::vector<std::string>>()
+                    && unitIdsOf(mol.atoms[3]) == tv.at("expectedRemainderUnitIds").get<std::vector<std::string>>()
+                    && fusedIds == tv.at("expectedFusedTokenUnitIds").get<std::vector<std::string>>()
+                    && mol.atoms[1].metaId == std::string(64, '0') && mol.atoms[2].metaId == recipient.bundle
+                    && std::to_string(sumOf(mol)) == tv.at("expectedSum").get<std::string>()
+                    && passesCheck(mol);
+                Logger::test("fusion " + name + " (V+F sum 0, unit routing, check passes)", ok);
+                all_pass = all_pass && ok;
+                last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
+            }
+
+            // REPLENISH: C (token, action=add) + I, signed by the USER wallet
+            for (const auto& tv : v.at("token_replenish").at("tests")) {
+                const std::string name = tv.at("name").get<std::string>();
+                const std::string replenishToken = tv.at("token").get<std::string>();
+                std::vector<KnishIO::TokenUnit> units;
+                for (const auto& u : tv.at("units")) units.push_back({u.at(0).get<std::string>(), u.at(1).get<std::string>(), {}});
+                const std::string amount = tv.at("amount").is_null() ? "0" : std::to_string(tv.at("amount").get<long long>());
+                Wallet source(secret, "USER");
+                Wallet credited(secret, replenishToken);
+                Wallet remainder(secret, "USER");
+                Molecule mol;
+                mol.sourceWallet = std::make_shared<Wallet>(source);
+                mol.remainderWallet = std::make_shared<Wallet>(remainder);
+                mol.initTokenReplenish(source, credited, amount, units);
+                setFixedTimestamps(mol);
+                mol.sign(secret, false);
+                std::vector<std::string> isotopes;
+                for (const auto& a : mol.atoms) isotopes.push_back(a.isotope);
+                const Atom& c = mol.atoms.at(0);
+                const bool unitsOk = tv.at("expectedTokenUnitIds").is_null()
+                    ? !metaValue(c, "tokenUnits").has_value()
+                    : unitIdsOf(c) == tv.at("expectedTokenUnitIds").get<std::vector<std::string>>();
+                bool ok = isotopes == tv.at("expectedIsotopes").get<std::vector<std::string>>()
+                    && c.value == tv.at("expectedCValue").get<std::string>()
+                    && c.metaType == tv.at("expectedMetaType").get<std::string>()
+                    && c.metaId == tv.at("expectedMetaId").get<std::string>()
+                    && metaValue(c, "action") == tv.at("expectedAction").get<std::string>()
+                    && unitsOk
+                    && passesCheck(mol);
+                Logger::test("replenish " + name + " (C+I, action add, check passes)", ok);
                 all_pass = all_pass && ok;
                 last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
             }

@@ -107,6 +107,8 @@ public:
         std::string position;
         std::string pubkey;
         std::string balance;
+        std::string batchId;                         ///< Batch id (shadow / batched wallets)
+        std::vector<KnishIO::TokenUnit> tokenUnits;  ///< Stackable (NFT) units held by this wallet
     };
     
     /**

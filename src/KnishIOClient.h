@@ -285,20 +285,57 @@ public:
                        const std::vector<std::pair<std::string, std::string>>& tradeRates = {});
 
     /**
-     * Withdraw tokens from a buffer wallet back to the caller's own bundle (mirroring JS
-     * withdrawBufferToken).
+     * Withdraw tokens from a buffer wallet back to the caller's own bundle (contract 9.6).
      *
-     * Builds a B-V-B molecule via Molecule::initWithdrawBuffer: the source (buffer) wallet is debited
-     * its full balance (B-isotope), @p amount is credited to the caller's own bundle (V-isotope shadow,
-     * walletBundle -> own bundle), and the buffer wallet itself is the remainder (B-isotope) holding
-     * the change. Conserves to 0 across B+V.
+     * Builds a B-V-B molecule via Molecule::initWithdrawBuffer: the source buffer wallet S is debited
+     * its full balance (B-isotope), @p amount is credited to the caller's own bundle (an addressless
+     * V atom, walletBundle -> own bundle, with a fresh batch id only when S has one), and a FRESH
+     * remainder wallet (a new position, never S itself) receives S.balance - amount as a B atom.
+     * Conserves to 0 across B+V. No ContinuID atom.
      *
      * @param token Token slug to withdraw
      * @param amount Amount to withdraw from the buffer
+     * @param sourceWallet Optional buffer wallet to withdraw from (its position and balance must be
+     *                     set); defaults to the bundle's buffer wallet from Balance(type: "buffer")
      * @return Future containing the ProposeMolecule response (use isAccepted())
      */
     [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
-    withdrawBufferToken(const std::string& token, double amount);
+    withdrawBufferToken(const std::string& token, double amount,
+                        const KnishIO::Wallet* sourceWallet = nullptr);
+
+    /**
+     * Mint more supply of an existing token (contract 9.1).
+     *
+     * Builds a C (metaType "token", meta action = "add") + ContinuID molecule signed from the bundle's
+     * ContinuID pointer, crediting the identity's existing wallet for the token (from Balance) or a new
+     * one. Only the token's creator may replenish, and only a token whose supply is "infinite" or
+     * "replenishable"; the validator enforces both.
+     *
+     * @param token Token slug to replenish
+     * @param amount Supply to add (fungible); must be > 0. With @p units it must be 0 or units.size()
+     * @param units New stackable / non-fungible unit ids; the minted value is then their count
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    replenishToken(const std::string& token, double amount,
+                   const std::vector<std::string>& units = {});
+
+    /**
+     * Fuse stackable units into one new unit (contract 9.2).
+     *
+     * Builds V(source -B) + V(burn +(M-1)) + F(recipient +1) + V(remainder +(B-M)) from the bundle's
+     * wallet for @p tokenSlug (from Balance). The new unit carries metas.fusedTokenUnits = the fused
+     * units. No ContinuID atom.
+     *
+     * @param bundleHash Recipient bundle of the new unit (the caller's own bundle or another)
+     * @param tokenSlug Stackable token slug
+     * @param newTokenUnitId Id (and name) of the new unit; must not exist in the source wallet
+     * @param fusedTokenUnitIds Ids of the units to fuse (at least two), in caller order
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    fuseToken(const std::string& bundleHash, const std::string& tokenSlug,
+              const std::string& newTokenUnitId, const std::vector<std::string>& fusedTokenUnitIds);
 
     /**
      * Create a new wallet on the ledger (C-isotope metaType "wallet" + ContinuID)
@@ -393,7 +430,10 @@ private:
 
     // Live-wiring helpers (slice 4): sign + submit a molecule via ProposeMolecule, and resolve a
     // bundle's live on-ledger ContinuID position so a non-U molecule signs at the chain head.
-    [[nodiscard]] std::unique_ptr<response::ResponseProposeMolecule> submitMolecule(KnishIO::Molecule& mol);
+    // checkBeforeSend runs Molecule::check on the signed molecule and sends nothing when it throws
+    // (contract 9.7: every molecule a client operation builds); proposeMolecule, the raw path for a
+    // caller-built molecule, passes false.
+    [[nodiscard]] std::unique_ptr<response::ResponseProposeMolecule> submitMolecule(KnishIO::Molecule& mol, bool checkBeforeSend = true);
     [[nodiscard]] std::string resolveContinuIdPosition(const std::string& bundle);
 
     // Live-wiring helper (slice 5b): a bundle's on-ledger token wallet (from the Balance query) —
@@ -403,10 +443,15 @@ private:
         std::string position;
         std::string address;
         std::string balance;   // the on-ledger amount (validator returns it as a string)
+        std::string batchId;   // the wallet's batch id, if it has one
         bool found = false;
         std::vector<KnishIO::TokenUnit> tokenUnits;  // stackable (NFT) units, if the wallet has any
     };
-    [[nodiscard]] TokenWalletInfo resolveTokenWallet(const std::string& bundle, const std::string& token);
+    // buffer = true reads Balance(type: "buffer"), the bundle's buffer wallet; false its regular one.
+    [[nodiscard]] TokenWalletInfo resolveTokenWallet(const std::string& bundle, const std::string& token, bool buffer = false);
+
+    // Unit tests reach submitMolecule through this to prove the pre-submit check (tests/phaseb_molecules.cpp).
+    friend class KnishIOClientTestAccess;
 };
 
 } // namespace knishio

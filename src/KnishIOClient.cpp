@@ -1,6 +1,7 @@
 #include "KnishIOClient.h"
 #include "Wallet.h"
 #include "Molecule.h"
+#include "AtomsNotFoundException.h"
 #include "utility.h"
 #include "exception/KnishIOException.h"
 #include "http/GraphQLClient.h"
@@ -235,7 +236,8 @@ KnishIOClient::queryWallets(const std::optional<std::string>& bundle,
         static const std::string WALLETS_QUERY =
             "query Wallets($bundleHash: String!, $limit: Int, $offset: Int) {"
             " wallets(bundleHash: $bundleHash, limit: $limit, offset: $offset) {"
-            " address bundleHash tokenSlug position pubkey balance amount batchId } }";
+            " address bundleHash tokenSlug position pubkey balance amount batchId"
+            " tokenUnits { id name metas } } }";
         nlohmann::json variables;
         variables["bundleHash"] = b;
         variables["limit"] = 100;
@@ -326,16 +328,24 @@ Molecule* KnishIOClient::createMolecule(
 
 // Sign + submit a molecule via ProposeMolecule (sync; reused by proposeMolecule + the token ops).
 // Serializes + strips the validation-context wallets the validator's MoleculeInput rejects.
+// With checkBeforeSend the signed molecule must pass Molecule::check or nothing is sent: a missing
+// ContinuID atom throws AtomsNotFoundException, any other failure KnishIOException.
 std::unique_ptr<response::ResponseProposeMolecule>
-KnishIOClient::submitMolecule(KnishIO::Molecule& mol) {
+KnishIOClient::submitMolecule(KnishIO::Molecule& mol, bool checkBeforeSend) {
     if (!hasSecret()) {
         throw KnishIOException("No secret available for signing molecule");
     }
 
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — guarded by hasSecret() above
     mol.sign(pImpl_->secret.value());
-    if (!Molecule::verify(mol)) {
-        throw KnishIOException("Molecule validation failed");
+    if (checkBeforeSend) {
+        try {
+            Molecule::check(mol);
+        } catch (const AtomsNotFoundException&) {
+            throw;
+        } catch (const std::runtime_error& e) {
+            throw KnishIOException(e.what());
+        }
     }
 
     nlohmann::json moleculeJson = nlohmann::json::parse(mol.toJson());
@@ -424,15 +434,18 @@ std::vector<KnishIO::TokenUnit> parseWalletTokenUnits(const nlohmann::json& wall
 }
 
 KnishIOClient::TokenWalletInfo
-KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& token) {
+KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& token, bool buffer) {
+    // Balance(type: "buffer") returns only the bundle's buffer rows; any other type only its
+    // regular rows (validator 0.6.1, contract 9.6).
     static const std::string BALANCE_QUERY =
-        "query($bundleHash: String, $token: String) {"
-        " Balance(bundleHash: $bundleHash, token: $token) {"
+        "query($bundleHash: String, $token: String, $type: String) {"
+        " Balance(bundleHash: $bundleHash, token: $token, type: $type) {"
         " position address tokenSlug amount pubkey batchId bundleHash"
         " tokenUnits { id name metas } } }";
     nlohmann::json variables;
     variables["bundleHash"] = bundle;
     variables["token"] = token;
+    variables["type"] = buffer ? nlohmann::json("buffer") : nlohmann::json(nullptr);
 
     TokenWalletInfo info;
     try {
@@ -451,6 +464,9 @@ KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& 
                 if (bal.contains("amount") && bal["amount"].is_string()) {
                     info.balance = bal["amount"].get<std::string>();
                 }
+                if (bal.contains("batchId") && bal["batchId"].is_string()) {
+                    info.batchId = bal["batchId"].get<std::string>();
+                }
                 // A spendable (non-shadow) source must have a real position + address.
                 info.found = !info.position.empty() && !info.address.empty();
                 info.tokenUnits = parseWalletTokenUnits(bal);  // stackable units (forward-compat)
@@ -466,13 +482,16 @@ KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& 
     return info;
 }
 
+// The raw path: a caller-built molecule is signed and sent as it is, with no pre-submit check
+// (contract 9.7) — negative tests submit invalid molecules on purpose, and the validator's Tier 1
+// check protects this path.
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::proposeMolecule(Molecule* molecule,
                               const std::optional<std::string>& queryUri) {
     std::unique_ptr<Molecule> mol(molecule);
     (void)queryUri;
     return std::async(std::launch::async, [this, mol = std::move(mol)]() -> std::unique_ptr<response::ResponseProposeMolecule> {
-        return submitMolecule(*mol);
+        return submitMolecule(*mol, false);
     });
 }
 
@@ -819,41 +838,135 @@ KnishIOClient::depositBufferToken(const std::string& token, double amount,
 }
 
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
-KnishIOClient::withdrawBufferToken(const std::string& token, double amount) {
-    return std::async(std::launch::async, [this, token, amount]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+KnishIOClient::withdrawBufferToken(const std::string& token, double amount, const KnishIO::Wallet* sourceWallet) {
+    std::shared_ptr<Wallet> given = sourceWallet != nullptr ? std::make_shared<Wallet>(*sourceWallet) : nullptr;
+    return std::async(std::launch::async, [this, token, amount, given]() -> std::unique_ptr<response::ResponseProposeMolecule> {
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
         const std::string senderBundle = getBundle();
+        const int mlKem = pImpl_->config.mlKemParameterSet;
 
-        // SOURCE: the bundle's on-ledger BUFFER wallet, resolved live via the Balance query.
-        TokenWalletInfo src = resolveTokenWallet(senderBundle, token);
-        if (!src.found) {
-            throw KnishIOException("No spendable buffer wallet for token " + token);
+        // SOURCE S: the caller's buffer wallet, or the bundle's buffer row from Balance(type: "buffer").
+        // A regular row is never a buffer source (validator 0.6.1 rejects a B debit from it).
+        std::shared_ptr<Wallet> source = given;
+        if (source == nullptr) {
+            TokenWalletInfo src = resolveTokenWallet(senderBundle, token, true);
+            if (!src.found) {
+                throw KnishIOException("No spendable buffer wallet for token " + token);
+            }
+            source = std::make_shared<Wallet>(sec, token, src.position, 64, mlKem);
+            source->balance = src.balance;
+            source->batchId = src.batchId;
+            source->tokenUnits = src.tokenUnits;
         }
         const long long amountLL = static_cast<long long>(amount);
         long long srcBalance = 0;
-        try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
+        try { srcBalance = std::stoll(source->balance); } catch (const std::exception&) { srcBalance = 0; }
         if (srcBalance < amountLL) {
             throw KnishIOException("Insufficient buffer balance for token " + token);
         }
 
-        Wallet source(sec, token, src.position);  // the buffer wallet (B-isotope source AND remainder)
-        source.balance = src.balance;             // initWithdrawBuffer debits the full balance (UTXO)
-
-        // RECIPIENT: the caller's OWN bundle (JS: recipients = { getBundle(): amount }). Shadow wallet
-        // (no position/address); the validator credits the withdrawn amount back to this bundle.
-        Wallet recipient(sec, token);
+        // RECIPIENT: the caller's OWN bundle (JS: recipients = { getBundle(): amount }), addressless; a
+        // fresh batch id only when S has one.
+        Wallet recipient(sec, token, "", 64, mlKem);
         recipient.bundle = senderBundle;
         recipient.address = "";
         recipient.position = "";
+        recipient.batchId = source->batchId.empty() ? std::string() : generateSecret(64);
 
-        // B-V-B: the buffer wallet is BOTH source and remainder (JS: remainderWallet = sourceWallet).
+        // REMAINDER: a FRESH position (S.createRemainder): value credited at S's consumed signing
+        // position would be stranded, and validator 0.6.1 rejects it.
+        Wallet remainder(sec, token, "", 64, mlKem);
+        remainder.batchId = source->batchId;
+
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
-        mol.sourceWallet = std::make_shared<Wallet>(source);
-        mol.remainderWallet = std::make_shared<Wallet>(source);
-        mol.initWithdrawBuffer(source, {recipient}, {std::to_string(amountLL)}, source);
+        mol.sourceWallet = source;
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initWithdrawBuffer(*source, {recipient}, {std::to_string(amountLL)}, remainder);
 
         log("INFO", "Withdrawing " + std::to_string(amountLL) + " " + token + " from buffer");
+        return submitMolecule(mol);
+    });
+}
+
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::replenishToken(const std::string& token, double amount, const std::vector<std::string>& units) {
+    return std::async(std::launch::async, [this, token, amount, units]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+        const int mlKem = pImpl_->config.mlKemParameterSet;
+
+        const long long amountLL = static_cast<long long>(amount);
+        if (units.empty() && amountLL <= 0) {
+            throw KnishIOException("Amount to replenish must be positive");
+        }
+        if (!units.empty() && amountLL != 0 && amountLL != static_cast<long long>(units.size())) {
+            throw KnishIOException("Replenish amount must be omitted or equal the unit count");
+        }
+
+        // Signed like createToken: the USER wallet at the live ContinuID pointer, a fresh USER remainder.
+        const std::string bundle = getBundle();
+        Wallet source(sec, "USER", resolveContinuIdPosition(bundle), 64, mlKem);
+        Wallet remainder(sec, "USER", "", 64, mlKem);
+
+        // CREDITED: the identity's existing wallet for the token, or a new one.
+        TokenWalletInfo existing = resolveTokenWallet(bundle, token);
+        Wallet credited(sec, token, existing.found ? existing.position : std::string(), 64, mlKem);
+        if (existing.found) {
+            credited.address = existing.address;
+            credited.batchId = existing.batchId;
+        }
+
+        std::vector<KnishIO::TokenUnit> newUnits;
+        newUnits.reserve(units.size());
+        for (const auto& id : units) {
+            newUnits.push_back(KnishIO::TokenUnit{id, id, {}});
+        }
+
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initTokenReplenish(source, credited, std::to_string(amountLL), newUnits);
+
+        log("INFO", "Replenishing token " + token);
+        return submitMolecule(mol);
+    });
+}
+
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::fuseToken(const std::string& bundleHash, const std::string& tokenSlug,
+                         const std::string& newTokenUnitId, const std::vector<std::string>& fusedTokenUnitIds) {
+    return std::async(std::launch::async, [this, bundleHash, tokenSlug, newTokenUnitId, fusedTokenUnitIds]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+        const std::string senderBundle = getBundle();
+        const int mlKem = pImpl_->config.mlKemParameterSet;
+
+        // SOURCE S: the bundle's wallet for the stackable token (position, balance, units, batch id).
+        TokenWalletInfo src = resolveTokenWallet(senderBundle, tokenSlug);
+        if (!src.found) {
+            throw KnishIOException("No spendable wallet for token " + tokenSlug);
+        }
+        Wallet source(sec, tokenSlug, src.position, 64, mlKem);
+        source.balance = src.balance;
+        source.batchId = src.batchId;
+        source.tokenUnits = src.tokenUnits;
+
+        // RECIPIENT of the new unit: a fresh own wallet, or the addressless wallet of another bundle.
+        Wallet recipient(sec, tokenSlug, "", 64, mlKem);
+        if (bundleHash != senderBundle) {
+            recipient.bundle = bundleHash;
+            recipient.address = "";
+            recipient.position = "";
+        }
+        Wallet remainder(sec, tokenSlug, "", 64, mlKem);
+
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initTokenFusion(source, recipient, remainder, fusedTokenUnitIds, newTokenUnitId);
+
+        log("INFO", "Fusing " + std::to_string(fusedTokenUnitIds.size()) + " " + tokenSlug + " units into " + newTokenUnitId);
         return submitMolecule(mol);
     });
 }

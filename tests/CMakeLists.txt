@@ -221,6 +221,33 @@ set_tests_properties(ProvenRelogin PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:proven_relogin>
 )
 
+# Phase B molecules: the token_replenish, stackable_fusion_conservation and
+# buffer_withdraw_fresh_remainder vectors built with the SDK's own builders, and replenishToken,
+# fuseToken, withdrawBufferToken and the pre-submit check against a loopback validator stub.
+# No network.
+add_executable(phaseb_molecules phaseb_molecules.cpp)
+target_link_libraries(phaseb_molecules
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(phaseb_molecules PRIVATE cxx_std_20)
+target_compile_definitions(phaseb_molecules PRIVATE
+    KNISHIO_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/canonical-patent-vectors.json"
+)
+set_target_properties(phaseb_molecules PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME PhaseBMolecules
+    COMMAND phaseb_molecules
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(PhaseBMolecules PROPERTIES
+    LABELS "replenish;fusion;buffer;vectors;unit"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:phaseb_molecules>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage

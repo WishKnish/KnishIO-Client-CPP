@@ -72,6 +72,9 @@ def main():
                 info.uid = info.gid = 0
                 info.uname = info.gname = ''
                 info.mtime = mtime
+                if info.issym():
+                    # lstat modes of a symlink differ by host (macOS 0o755, Linux 0o777); pin them.
+                    info.mode = 0o777
                 if info.isfile():
                     with open(path, 'rb') as fh:
                         tar.addfile(info, fh)
