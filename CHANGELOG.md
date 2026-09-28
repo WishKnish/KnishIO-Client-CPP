@@ -14,6 +14,41 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [1.2.3] — 2026-09-28
+
+### Fixed
+
+- `replenishToken(token, amount, units)` is new: it mints more supply of an existing token with a
+  `token` C atom whose meta `action` is `add`, signed from the ContinuID pointer like
+  `createToken`, plus the ContinuID atom. The atom credits the identity's existing wallet for the
+  token (or a new one) and names it in the metas `address`, `position`, `pubkey` and, when the
+  wallet has one, `batchId`; stackable units ride as `tokenUnits` triples and set the value.
+  Validator 0.6.0 and later accept it from the token's creator for supply `infinite` or
+  `replenishable`. The C++ SDK had no replenish.
+- `fuseToken(bundleHash, tokenSlug, newTokenUnitId, fusedTokenUnitIds)` is new: it fuses two or
+  more stackable units into one new unit with V (source, the fused units), V (burn, all fused
+  units but the last), F (the new unit, whose `fusedTokenUnits` meta lists the fused units) and V
+  (the kept units) — the molecule validator 0.6.0 and later accept. The C++ SDK had no fusion.
+- `withdrawBufferToken()` debits the bundle's buffer wallet (`Balance(type: "buffer")`) and puts
+  the remainder at a fresh position. It debited the highest-balance regular wallet and credited
+  the remainder back to the signing position, behind a spent one-time key; validator 0.6.1
+  rejects both. An optional `sourceWallet` selects the buffer wallet.
+- Every molecule a client operation builds now passes `Molecule::check()` before it is sent: a
+  USER-signed molecule without its ContinuID atom throws `AtomsNotFoundException`, a failed hash,
+  conservation or signature check `KnishIOException`, and nothing is sent. `proposeMolecule()`,
+  the raw path for a caller-built molecule, sends it unchecked (it ran `Molecule::verify()` before).
+- `queryWallets()` returns each wallet's `tokenUnits` and `batchId`.
+- Release packaging (14285f4): the release package installs a self-contained header tree under
+  `include/knishio` (1.2.2 installed headers that included the uninstalled `TokenUnit.h` and
+  subdirectory paths flattening had destroyed); the CMake package config exports
+  `KnishIO::ClientCPP` and `KnishIO::ClientCPPStatic` and finds every dependency they link; the
+  GitHub Release gains `knishio-client-cpp-<ver>-src.tar.gz`, which carries the
+  `external/mlkem-native` submodule the GitHub source archive omits; and CI builds a consumer
+  against the relocated package (every header alone, plain `-I/-L`, `find_package`) before any
+  Release exists.
+- The source tarball pins symlink member modes to `0777`, so it is byte-identical whether it is
+  built on macOS or Linux.
+
 ## [1.2.2] — 2026-09-26
 
 ### Fixed
@@ -329,7 +364,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.2...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.3...HEAD
+[1.2.3]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.3
 [1.2.2]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.2
 [1.2.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.1
 [1.2.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.0
