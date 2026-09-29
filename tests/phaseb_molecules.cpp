@@ -1,40 +1,35 @@
 /**
  * @file phaseb_molecules.cpp
- * @brief Replenish, stackable fusion, buffer withdraw and the pre-submit check (Phase B contract).
+ * @brief Replenish, stackable fusion, buffer withdraw, createToken units and the pre-submit check.
  *
  * Two halves:
  *  - the shared canonical vectors token_replenish, stackable_fusion_conservation and
  *    buffer_withdraw_fresh_remainder, built with the SDK's own Molecule builders and checked with
  *    Molecule::check (the single-unit fusion must throw);
- *  - the client operations against a loopback validator stub (the client has no transport seam):
- *    which wallet replenishToken credits and which pointer signs it, how fuseToken assigns batch ids
- *    and recipients, that withdrawBufferToken reads Balance(type: "buffer") and remainders at a
- *    fresh position, that a built molecule failing the check is never sent, and that the raw
- *    proposeMolecule path sends a caller-built molecule unchecked.
+ *  - the client operations against a loopback validator stub (tests/loopback_validator.h; the
+ *    client has no transport seam): the create_token_units vectors through createToken (tokenUnits
+ *    as compact [id, name, metas] triples), which wallet replenishToken credits and which pointer
+ *    signs it, how fuseToken assigns batch ids and recipients, that withdrawBufferToken reads
+ *    Balance(type: "buffer") and remainders at a fresh position, that a built molecule failing the
+ *    check is never sent, and that the raw proposeMolecule path sends a caller-built molecule
+ *    unchecked.
  */
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <algorithm>
-#include <atomic>
-#include <cctype>
 #include <fstream>
 #include <iostream>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "AtomsNotFoundException.h"
 #include "KnishIOClient.h"
 #include "Molecule.h"
 #include "Wallet.h"
+#include "loopback_validator.h"
 #include "response/Response.h"
 #include "third_party/nlohmann/json.hpp"
 
+using knishio_test::Session;
 using nlohmann::json;
 
 namespace knishio {
@@ -61,12 +56,6 @@ void check(bool ok, const std::string& name, const std::string& detail = {}) {
     if (!ok) {
         ++failures;
     }
-}
-
-std::string lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
 }
 
 std::optional<std::string> metaOf(const std::vector<std::pair<std::string, std::string>>& meta, const std::string& key) {
@@ -271,186 +260,6 @@ void withdrawVectors(const json& vectors, const std::string& secret) {
     }
 }
 
-// ------------------------------------------------------------------------------------------
-// Loopback validator stub
-// ------------------------------------------------------------------------------------------
-
-class StubValidator {
-public:
-    StubValidator() {
-        listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        int one = 1;
-        ::setsockopt(listenFd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port = 0;
-        if (::bind(listenFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0
-            || ::listen(listenFd_, 16) != 0) {
-            throw std::runtime_error("stub validator: cannot listen on loopback");
-        }
-        socklen_t len = sizeof(addr);
-        ::getsockname(listenFd_, reinterpret_cast<sockaddr*>(&addr), &len);
-        port_ = ntohs(addr.sin_port);
-        thread_ = std::thread([this] { serve(); });
-    }
-
-    ~StubValidator() {
-        stopping_ = true;
-        int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port = htons(port_);
-        ::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        ::close(fd);
-        thread_.join();
-        ::close(listenFd_);
-    }
-
-    [[nodiscard]] std::string uri() const { return "http://127.0.0.1:" + std::to_string(port_) + "/graphql"; }
-
-    void setContinuId(json continuId) { std::lock_guard<std::mutex> lock(mutex_); continuId_ = std::move(continuId); }
-    void setBalance(json regular, json buffer = nullptr) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        regular_ = std::move(regular);
-        buffer_ = std::move(buffer);
-    }
-
-    [[nodiscard]] std::vector<json> requests(const std::string& operation) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<json> out;
-        for (const auto& r : requests_) {
-            if (r.value("query", "").find(operation) != std::string::npos) out.push_back(r);
-        }
-        return out;
-    }
-
-private:
-    void serve() {
-        while (true) {
-            int fd = ::accept(listenFd_, nullptr, nullptr);
-            if (stopping_) {
-                if (fd >= 0) ::close(fd);
-                return;
-            }
-            if (fd < 0) continue;
-            handle(fd);
-            ::close(fd);
-        }
-    }
-
-    static bool sendAll(int fd, const std::string& data) {
-        size_t sent = 0;
-        while (sent < data.size()) {
-            ssize_t n = ::send(fd, data.data() + sent, data.size() - sent, 0);
-            if (n <= 0) return false;
-            sent += static_cast<size_t>(n);
-        }
-        return true;
-    }
-
-    void handle(int fd) {
-        std::string buf;
-        char chunk[8192];
-        size_t headerEnd = std::string::npos;
-        while ((headerEnd = buf.find("\r\n\r\n")) == std::string::npos) {
-            ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
-            if (n <= 0) return;
-            buf.append(chunk, static_cast<size_t>(n));
-        }
-        const std::string headers = lower(buf.substr(0, headerEnd));
-        size_t contentLength = 0;
-        const auto cl = headers.find("content-length:");
-        if (cl != std::string::npos) contentLength = std::stoul(headers.substr(cl + 15));
-        if (headers.find("expect: 100-continue") != std::string::npos) {
-            if (!sendAll(fd, "HTTP/1.1 100 Continue\r\n\r\n")) return;
-        }
-        std::string body = buf.substr(headerEnd + 4);
-        while (body.size() < contentLength) {
-            ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
-            if (n <= 0) return;
-            body.append(chunk, static_cast<size_t>(n));
-        }
-
-        std::string reply;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            json request = json::parse(body, nullptr, false);
-            if (request.is_discarded()) request = json::object();
-            requests_.push_back(request);
-            const std::string query = request.value("query", "");
-            if (query.find("ContinuId") != std::string::npos) {
-                reply = json{{"data", {{"ContinuId", continuId_}}}}.dump();
-            } else if (query.find("Balance") != std::string::npos) {
-                const json vars = request.value("variables", json::object());
-                const bool buffer = vars.contains("type") && vars["type"] == "buffer";
-                reply = json{{"data", {{"Balance", buffer ? buffer_ : regular_}}}}.dump();
-            } else if (query.find("ProposeMolecule") != std::string::npos) {
-                ++proposals_;
-                json pm = {{"molecularHash", "stub-hash-" + std::to_string(proposals_)},
-                           {"status", "accepted"},
-                           {"reason", nullptr},
-                           {"createdAt", "0"},
-                           {"payload", json{{"token", "stub-jwt"}, {"key", "stub-validator-key"}}.dump()}};
-                reply = json{{"data", {{"ProposeMolecule", pm}}}}.dump();
-            } else {
-                reply = R"({"data":null})";
-            }
-        }
-        sendAll(fd, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-                        + std::to_string(reply.size()) + "\r\nConnection: close\r\n\r\n" + reply);
-    }
-
-    int listenFd_ = -1;
-    uint16_t port_ = 0;
-    std::atomic<bool> stopping_{false};
-    std::thread thread_;
-    mutable std::mutex mutex_;
-    std::vector<json> requests_;
-    json continuId_ = nullptr;
-    json regular_ = nullptr;
-    json buffer_ = nullptr;
-    int proposals_ = 0;
-};
-
-struct Session {
-    StubValidator stub;
-    std::string secret = knishio::KnishIOClient::generateSecret();
-    std::unique_ptr<knishio::KnishIOClient> client;
-    std::string bundle;
-
-    Session() {
-        client = knishio::KnishIOClient::Builder().uris({stub.uri()}).cellSlug("public").maxRetries(0)
-                     .timeout(std::chrono::milliseconds(10000)).build();
-        (void)client->requestAuthToken(secret).get();   // no pointer yet: AUTH login, stub issues a token
-        bundle = KnishIO::Wallet::generateBundleHash(secret);
-    }
-
-    // After login the bundle's ContinuID pointer is the USER wallet at `position`.
-    void pointAt(const std::string& position) {
-        KnishIO::Wallet user(secret, "USER", position);
-        stub.setContinuId({{"position", position}, {"address", user.address}, {"tokenSlug", "USER"},
-                           {"bundleHash", bundle}, {"pubkey", nullptr}, {"characters", "BASE64"}});
-    }
-
-    [[nodiscard]] json balanceRow(const std::string& token, const std::string& position, const std::string& amount,
-                                  const std::string& batchId, const std::vector<std::string>& units = {}) const {
-        KnishIO::Wallet wallet(secret, token, position);
-        json unitRows = json::array();
-        for (const auto& id : units) unitRows.push_back({{"id", id}, {"name", id}, {"metas", json::object()}});
-        return {{"position", position}, {"address", wallet.address}, {"tokenSlug", token}, {"amount", amount},
-                {"pubkey", nullptr}, {"batchId", batchId.empty() ? json(nullptr) : json(batchId)},
-                {"bundleHash", bundle}, {"tokenUnits", unitRows}};
-    }
-
-    [[nodiscard]] std::vector<json> built() const {
-        auto all = stub.requests("ProposeMolecule");
-        all.erase(all.begin());   // the login
-        return all;
-    }
-};
-
 const json& atomsOf(const json& proposal) { return proposal["variables"]["molecule"]["atoms"]; }
 
 std::optional<std::string> jmeta(const json& atom, const std::string& key) {
@@ -485,6 +294,43 @@ std::string errorOf(F&& op) {
 // ------------------------------------------------------------------------------------------
 // Client operations
 // ------------------------------------------------------------------------------------------
+
+// create_token_units: the public createToken with bare unit ids sends the C atom meta tokenUnits
+// as compact [id, id, {}] triples, byte-exact.
+void createTokenUnitsVectors(const json& vectors) {
+    std::cout << "\ncreate_token_units vectors: createToken with stackable units\n";
+    for (const auto& tv : vectors.at("create_token_units").at("tests")) {
+        const std::string name = tv.at("name").get<std::string>();
+        const std::string token = tv.at("token").get<std::string>();
+        Session s;
+        auto resp = s.client->createToken(token, 0, {{"fungibility", "stackable"}},
+                                          tv.at("units").get<std::vector<std::string>>()).get();
+        const auto sent = s.built();
+        // submitMolecule runs Molecule::check first and sends nothing when it throws.
+        check(sent.size() == 1, name + ": one molecule proposed (Molecule::check passed)", std::to_string(sent.size()));
+        if (sent.size() != 1) continue;
+        const auto& a = atomsOf(sent[0]);
+        std::vector<std::string> isotopes;
+        for (const auto& atom : a) isotopes.push_back(jstr(atom, "isotope"));
+        check(isotopes == std::vector<std::string>{"C", "I"}, name + ": atoms C, I", join(isotopes));
+        const json& c = a.at(0);
+        check(jstr(c, "value") == tv.at("expectedCValue").get<std::string>()
+                  && jstr(c, "metaType") == tv.at("expectedMetaType").get<std::string>()
+                  && jstr(c, "metaId") == tv.at("expectedMetaId").get<std::string>(),
+              name + ": C value, metaType, metaId",
+              jstr(c, "value") + " " + jstr(c, "metaType") + " " + jstr(c, "metaId"));
+        const std::string tokenUnits = jmeta(c, "tokenUnits").value_or("<none>");
+        std::cout << "    tokenUnits " << tokenUnits << std::endl;
+        check(tokenUnits == tv.at("expectedTokenUnits").get<std::string>(), name + ": tokenUnits byte-exact",
+              "got " + tokenUnits + ", expected " + tv.at("expectedTokenUnits").get<std::string>());
+        std::vector<std::string> ids;
+        const json parsed = json::parse(tokenUnits, nullptr, false);
+        if (parsed.is_array()) {
+            for (const auto& u : parsed) ids.push_back(u.is_array() ? u.at(0).get<std::string>() : u.dump());
+        }
+        check(ids == tv.at("expectedTokenUnitIds").get<std::vector<std::string>>(), name + ": tokenUnits ids", join(ids));
+    }
+}
 
 void replenishCreditsExistingWallet() {
     std::cout << "\nreplenishToken: existing wallet, signed from the ContinuID pointer\n";
@@ -683,7 +529,7 @@ void rawProposeSendsUnchecked() {
 }  // namespace
 
 int main() {
-    std::cout << "Phase B molecules: replenish, stackable fusion, buffer withdraw, pre-submit check\n";
+    std::cout << "Phase B molecules: replenish, stackable fusion, buffer withdraw, createToken units, pre-submit check\n";
 
     std::ifstream f(KNISHIO_VECTORS_PATH);
     if (!f.is_open()) {
@@ -696,6 +542,7 @@ int main() {
     fusionVectors(vectors, secret);
     withdrawVectors(vectors, secret);
 
+    createTokenUnitsVectors(vectors);
     replenishCreditsExistingWallet();
     replenishCreatesWalletForStackableUnits();
     replenishRejectsNonPositiveAmount();

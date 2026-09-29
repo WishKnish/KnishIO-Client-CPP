@@ -40,6 +40,9 @@
 // Third-party includes
 #include "src/third_party/nlohmann/json.hpp"
 
+// Loopback validator stub: drives the public createToken offline (create_token_units vectors)
+#include "tests/loopback_validator.h"
+
 using json = nlohmann::json;
 using namespace std::chrono;
 
@@ -930,7 +933,7 @@ private:
     // (the hasCrossIsotope bypass — V-only atoms don't sum to 0). Molecular hashes are NOT frozen
     // (random positions). Reads the vendored fixture; SKIPS if absent (standalone CI).
     bool testBufferFamily() {
-        Logger::message("\nB1. Buffer Family Test (deposit, withdraw, fusion, replenish; vector-driven)", colors::BLUE);
+        Logger::message("\nB1. Buffer Family Test (deposit, withdraw, fusion, replenish, createToken units; vector-driven)", colors::BLUE);
 
         try {
             std::vector<std::string> candidates;
@@ -1167,6 +1170,37 @@ private:
                 Logger::test("replenish " + name + " (C+I, action add, check passes)", ok);
                 all_pass = all_pass && ok;
                 last_hash = mol.molecularHash; atom_total += static_cast<int>(mol.atoms.size());
+            }
+
+            // CREATE with units: the public createToken against the loopback validator stub (the client
+            // has no transport seam). Its C atom's tokenUnits must be the vector's compact triples,
+            // byte-exact; the molecule reaching the stub means Molecule::check passed (submitMolecule
+            // sends nothing when it throws).
+            for (const auto& tv : v.at("create_token_units").at("tests")) {
+                const std::string name = tv.at("name").get<std::string>();
+                knishio_test::Session session;
+                (void)session.client->createToken(tv.at("token").get<std::string>(), 0, {{"fungibility", "stackable"}},
+                                                  tv.at("units").get<std::vector<std::string>>()).get();
+                const auto sent = session.built();
+                bool ok = sent.size() == 1;
+                std::string tokenUnits = "<none>";
+                if (ok) {
+                    const json& atoms = sent[0]["variables"]["molecule"]["atoms"];
+                    const json& c = atoms.at(0);
+                    for (const auto& kv : c["meta"]) {
+                        if (kv.value("key", "") == "tokenUnits" && kv["value"].is_string()) tokenUnits = kv["value"].get<std::string>();
+                    }
+                    ok = atoms.size() == 2 && c.value("isotope", "") == "C" && atoms.at(1).value("isotope", "") == "I"
+                        && c.value("value", "") == tv.at("expectedCValue").get<std::string>()
+                        && c.value("metaType", "") == tv.at("expectedMetaType").get<std::string>()
+                        && c.value("metaId", "") == tv.at("expectedMetaId").get<std::string>()
+                        && tokenUnits == tv.at("expectedTokenUnits").get<std::string>();
+                    atom_total += static_cast<int>(atoms.size());
+                }
+                std::cout << "    tokenUnits: " << tokenUnits << std::endl;
+                Logger::test("createToken units " + name + " (C+I, tokenUnits triples byte-exact, check passes)", ok,
+                             ok ? "" : "expected " + tv.at("expectedTokenUnits").get<std::string>());
+                all_pass = all_pass && ok;
             }
 
             // ---- NEGATIVE: tampered buffer molecules the validator MUST reject. This

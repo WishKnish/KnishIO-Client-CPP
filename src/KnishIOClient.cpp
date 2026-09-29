@@ -521,14 +521,15 @@ KnishIOClient::createToken(const std::string& token,
         }
 
         // Stackable / non-fungible: the units ARE the supply (mirror the JS createToken contract):
-        // amount = unit count, splittable + decimals=0, tokenUnits meta = JSON array of unit ids.
+        // amount = unit count, splittable + decimals=0, tokenUnits meta = compact [id, name, metas]
+        // triples, a bare id becoming [id, id, {}] (the form every other unit operation sends).
         long long supply = static_cast<long long>(amount);
         auto fungIt = meta.find("fungibility");
         const std::string fungibility = (fungIt != meta.end()) ? fungIt->second : "";
         if (!units.empty() &&
             (fungibility == "stackable" || fungibility == "nonfungible" || fungibility == "non-fungible")) {
             nlohmann::json unitsJson = nlohmann::json::array();
-            for (const auto& u : units) unitsJson.push_back(u);
+            for (const auto& u : units) unitsJson.push_back(nlohmann::json::array({u, u, nlohmann::json::object()}));
             tokenMeta.push_back({"splittable", "1"});
             tokenMeta.push_back({"decimals", "0"});
             tokenMeta.push_back({"tokenUnits", unitsJson.dump()});
