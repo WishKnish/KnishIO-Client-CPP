@@ -14,6 +14,19 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [Unreleased]
+
+### Added
+
+- `KNISHIO_USE_KCORE` CMake option (default OFF). When ON, the SDK links the KnishIO Crypto Core
+  (`find_package(KnishIOCryptoCore 0.1.0)`, `KnishIO::kcore-static`) and uses it for the WOTS+
+  wallet address, the signing and verification chain loops, and ML-KEM-1024/768 keypair,
+  encapsulation and decapsulation. Only 2048/128-character lowercase hex with counts 0..64 goes
+  to kcore; anything else, or a kcore failure on the WOTS+ paths, runs the existing code, so a
+  verification verdict never depends on the build option.
+- `KnishIOClient::createMeta(metaType, metaId, meta)`: proposes an M-isotope meta molecule plus
+  ContinuID, signed by the USER wallet at the live ContinuID position. Test `CreateMetaMolecule`.
+
 ## [1.2.4] — 2026-09-29
 
 ### Fixed

@@ -11,6 +11,7 @@
 #include "AtomsNotFoundException.h"
 #include "exception/KnishIOException.h"
 #include "third_party/nlohmann/json.hpp"
+#include "kcore_bridge.h"
 
 using namespace std::chrono;
 using std::map;
@@ -789,6 +790,19 @@ std::string Molecule::sign(const std::string &secret, bool anonymous, bool compr
 	// Building a one-time-signature
 	std::string signatureFragments;
 
+#ifdef KNISHIO_HAVE_KCORE
+	bool chainedByKcore = false;
+	if (normalizedHash.size() >= keyChunks.size())
+	{
+		std::vector<int> counts(keyChunks.size());
+		for (size_t index = 0; index < keyChunks.size(); index++)
+		{
+			counts[index] = 8 - normalizedHash[index];
+		}
+		chainedByKcore = kcore_bridge::chainsHex(keyChunks, counts, signatureFragments);
+	}
+	if (!chainedByKcore)
+#endif
 	for (size_t index = 0; index < keyChunks.size(); index++)
 	{
 		auto workingChunk = keyChunks[index];
@@ -1105,6 +1119,19 @@ bool Molecule::verifyOts(const Molecule &molecule)
 
 	std::string keyFragments;
 
+#ifdef KNISHIO_HAVE_KCORE
+	bool chainedByKcore = false;
+	if (normalizedHash.size() >= otsChunks.size())
+	{
+		std::vector<int> counts(otsChunks.size());
+		for (size_t index = 0; index < otsChunks.size(); index++)
+		{
+			counts[index] = 8 + normalizedHash[index];
+		}
+		chainedByKcore = kcore_bridge::chainsHex(otsChunks, counts, keyFragments);
+	}
+	if (!chainedByKcore)
+#endif
 	for (size_t index = 0; index < otsChunks.size(); index++)
 	{
 		auto workingChunk = otsChunks[index];

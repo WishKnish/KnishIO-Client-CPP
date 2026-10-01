@@ -82,6 +82,15 @@ The ML-KEM (FIPS 203) implementation, providing both ML-KEM-768 and ML-KEM-1024,
    sudo make install
    ```
 
+5. Use the KnishIO Crypto Core (optional). With `-DKNISHIO_USE_KCORE=ON` the SDK links
+   kcore 0.1.0 statically and routes WOTS+ chains, wallet addresses and ML-KEM-1024/768 through
+   it. Point `CMAKE_PREFIX_PATH` at an extracted `knishio-crypto-core-0.1.0-<platform>` package;
+   configure prints `kcore: KnishIOCryptoCore 0.1.0`. Inputs kcore does not accept (anything
+   but lowercase hex of the exact length) run the SDK's own code, so results are identical.
+   ```bash
+   cmake -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=/path/to/knishio-crypto-core-0.1.0-linux-arm64-gnu ..
+   ```
+
 After installation, include the SDK in your project:
 
 ```cpp
@@ -211,6 +220,16 @@ This document will explain both ways.
   }
 
   std::cout << response.data() << std::endl; // Raw response
+  ```
+
+- Attaching **Metadata** to any (metaType, metaId):
+
+  ```cpp
+  auto response = client->createMeta("EdgeBench", "run-1", {{"sample", "1"}}).get();
+
+  if (response && response->isAccepted()) {
+      std::cout << "Meta accepted" << std::endl;
+  }
   ```
 
 - Issuing new **Tokens**:

@@ -248,6 +248,28 @@ set_tests_properties(PhaseBMolecules PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:phaseb_molecules>
 )
 
+# KnishIOClient::createMeta builds an M-isotope atom (metaType, metaId, meta) from the USER wallet
+# plus the ContinuID atom; built, signed and verified offline. No network.
+add_executable(create_meta_molecule create_meta_molecule.cpp)
+target_link_libraries(create_meta_molecule
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(create_meta_molecule PRIVATE cxx_std_20)
+set_target_properties(create_meta_molecule PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME CreateMetaMolecule
+    COMMAND create_meta_molecule
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(CreateMetaMolecule PROPERTIES
+    LABELS "meta;molecule;unit"
+    TIMEOUT 60
+    REQUIRED_FILES $<TARGET_FILE:create_meta_molecule>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage

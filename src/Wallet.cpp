@@ -6,6 +6,7 @@
 #include "third_party/BigInt/bigInt.h"
 #include "third_party/nlohmann/json.hpp"
 #include "KnishIOClient.h"
+#include "kcore_bridge.h"
 #include <sodium.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -151,6 +152,14 @@ std::string Wallet::generateWalletKey(const std::string &secret, const std::stri
   */
 std::string Wallet::generateWalletAddress(const std::string &key)
 {
+#ifdef KNISHIO_HAVE_KCORE
+	std::string viaKcore;
+	if (kcore_bridge::wotsAddress(key, viaKcore))
+	{
+		return viaKcore;
+	}
+#endif
+
 	// Subdivide private key into 16 fragments of 128 characters each
 	auto keyFragments = chunkSubstr(key, 128);
 
@@ -241,19 +250,27 @@ Wallet::MlKemIdentity Wallet::deriveMlKemKeypair(int parameterSet) const {
     if (parameterSet == 1024) {
         identity.publicKey.resize(1568);
         identity.privateKey.resize(3168);
+#ifdef KNISHIO_HAVE_KCORE
+        result = kcore_mlkem1024_keypair(seed_bytes.data(), identity.publicKey.data(), identity.privateKey.data());
+#else
         result = mlkem1024_keypair_derand(
             identity.publicKey.data(),
             identity.privateKey.data(),
             seed_bytes.data()
         );
+#endif
     } else {
         identity.publicKey.resize(1184);
         identity.privateKey.resize(2400);
+#ifdef KNISHIO_HAVE_KCORE
+        result = kcore_mlkem768_keypair(seed_bytes.data(), identity.publicKey.data(), identity.privateKey.data());
+#else
         result = mlkem768_keypair_derand(
             identity.publicKey.data(),
             identity.privateKey.data(),
             seed_bytes.data()
         );
+#endif
     }
 
     // Securely clear seed
@@ -424,6 +441,11 @@ std::map<std::string, std::string> Wallet::encryptMessageML(const std::string& m
     }
 
     int result = 0;
+#ifdef KNISHIO_HAVE_KCORE
+    result = (mlkem_parameter_set == 1024)
+        ? kcore_mlkem1024_encaps(recipient_key_bytes.data(), coins.data(), ciphertext.data(), shared_secret.data())
+        : kcore_mlkem768_encaps(recipient_key_bytes.data(), coins.data(), ciphertext.data(), shared_secret.data());
+#else
     if (mlkem_parameter_set == 1024) {
         result = mlkem1024_enc_derand(
             ciphertext.data(),
@@ -439,6 +461,7 @@ std::map<std::string, std::string> Wallet::encryptMessageML(const std::string& m
             coins.data()
         );
     }
+#endif
     sodium_memzero(coins.data(), coins.size());
 
     if (result != 0) {
@@ -493,7 +516,11 @@ std::string Wallet::mlkemDecryptToString(const std::map<std::string, std::string
     std::vector<uint8_t> shared_secret(32);
 
     auto decapsulate = [](int parameterSet, uint8_t* ss, const uint8_t* ct, const uint8_t* sk) {
+#ifdef KNISHIO_HAVE_KCORE
+        return (parameterSet == 1024) ? kcore_mlkem1024_decaps(ct, sk, ss) : kcore_mlkem768_decaps(ct, sk, ss);
+#else
         return (parameterSet == 1024) ? mlkem1024_dec(ss, ct, sk) : mlkem768_dec(ss, ct, sk);
+#endif
     };
 
     // ML-KEM secret keys are 2400 bytes (768) and 3168 bytes (1024), and mlkem*_dec reads that

@@ -581,6 +581,27 @@ KnishIOClient::createWallet(const std::string& token) {
 }
 
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+KnishIOClient::createMeta(const std::string& metaType, const std::string& metaId,
+                          const std::vector<std::pair<std::string, std::string>>& meta) {
+    return std::async(std::launch::async, [this, metaType, metaId, meta]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        ensureAuthenticated();
+        const std::string sec = pImpl_->secret.value();
+
+        const std::string livePos = resolveContinuIdPosition(getBundle());
+        Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
+        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);     // fresh remainder (relay race)
+
+        Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
+        mol.sourceWallet = std::make_shared<Wallet>(source);
+        mol.remainderWallet = std::make_shared<Wallet>(remainder);
+        mol.initMeta(source, meta, metaType, metaId);
+
+        log("INFO", "Creating meta " + metaType + "/" + metaId);
+        return submitMolecule(mol);
+    });
+}
+
+std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::claimShadowWallet(const std::string& token, const std::string& batchId) {
     return std::async(std::launch::async, [this, token, batchId]() -> std::unique_ptr<response::ResponseProposeMolecule> {
         ensureAuthenticated();

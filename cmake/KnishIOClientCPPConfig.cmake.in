@@ -22,6 +22,7 @@ pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
 find_dependency(OpenSSL)
 find_dependency(CURL)
 find_dependency(Threads)
+@KNISHIO_CONFIG_DEPS@
 
 # Include targets
 if(NOT TARGET KnishIO::ClientCPP)

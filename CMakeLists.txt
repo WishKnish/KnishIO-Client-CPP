@@ -33,6 +33,7 @@ endif()
 # older CPU. Defaults ON so local and benchmark builds are byte-for-byte unchanged;
 # the publish workflow sets it OFF to produce portable release artifacts.
 option(KNISHIO_NATIVE_ARCH "Optimize for the build host's CPU (-march=native). Turn OFF for distributable binaries." ON)
+option(KNISHIO_USE_KCORE "Use the KnishIO Crypto Core (kcore) for WOTS+ chains/address and ML-KEM" OFF)
 
 if(KNISHIO_NATIVE_ARCH)
     set(_KNISHIO_ARCH_FLAGS " -march=native -mtune=native")
@@ -227,6 +228,29 @@ if(KNISHIO_HTTP_SUPPORT AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/http_client.
     target_sources(knishio-client-cpp-static PRIVATE src/http_client.cpp)
     target_link_libraries(knishio-client-cpp-static PUBLIC CURL::libcurl)
     target_compile_definitions(knishio-client-cpp-static PUBLIC KNISHIO_HTTP_SUPPORT=1)
+endif()
+
+# Optional kcore backend: WOTS+ chains/address and ML-KEM go through the shared KnishIO Crypto
+# Core when it is linked; the SDK's own mlkem-native and SHAKE code stays compiled for the OFF
+# build, ineligible inputs, and every other SHAKE call. Set CMAKE_PREFIX_PATH to the extracted
+# KnishIOCryptoCore package root. The static library's export still names KnishIO::kcore-static,
+# so the installed package config finds kcore again (KNISHIO_CONFIG_DEPS).
+set(KNISHIO_CONFIG_DEPS "")
+if(KNISHIO_USE_KCORE)
+    find_package(KnishIOCryptoCore 0.1.0 CONFIG REQUIRED)
+    foreach(_knishio_lib knishio-client-cpp knishio-client-cpp-static)
+        target_link_libraries(${_knishio_lib} PRIVATE KnishIO::kcore-static)
+        target_compile_definitions(${_knishio_lib} PRIVATE KNISHIO_HAVE_KCORE=1)
+    endforeach()
+    # kcore.h gives kcore_* default visibility, so without this the shared library would
+    # re-export the whole kcore API next to the SDK's own.
+    if(APPLE)
+        target_link_options(knishio-client-cpp PRIVATE "LINKER:-load_hidden,$<TARGET_FILE:KnishIO::kcore-static>")
+    elseif(NOT WIN32)
+        target_link_options(knishio-client-cpp PRIVATE "LINKER:--exclude-libs,libkcore.a")
+    endif()
+    string(APPEND KNISHIO_CONFIG_DEPS "find_dependency(KnishIOCryptoCore ${KnishIOCryptoCore_VERSION} CONFIG)\n")
+    message(STATUS "kcore: KnishIOCryptoCore ${KnishIOCryptoCore_VERSION}")
 endif()
 
 # Create alias targets

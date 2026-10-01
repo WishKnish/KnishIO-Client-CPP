@@ -346,6 +346,18 @@ public:
     createWallet(const std::string& token);
 
     /**
+     * Attach metadata to an arbitrary (metaType, metaId) on the ledger (M-isotope + ContinuID),
+     * signed by the USER wallet at the bundle's live ContinuID position.
+     * @param metaType Meta type, e.g. "EdgeBench"
+     * @param metaId   Meta instance id
+     * @param meta     Key/value pairs, in order
+     * @return Future containing the ProposeMolecule response (use isAccepted())
+     */
+    [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
+    createMeta(const std::string& metaType, const std::string& metaId,
+               const std::vector<std::pair<std::string, std::string>>& meta);
+
+    /**
      * Claim a shadow wallet (an address-less wallet created by a batched transfer)
      * @param token Token slug to claim
      * @param batchId Batch id identifying the shadow wallet
