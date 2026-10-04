@@ -14,7 +14,7 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
-## [Unreleased]
+## [1.3.0] — 2026-10-04
 
 ### Added
 
@@ -26,6 +26,29 @@ substantiate a detail, the entry says so instead of guessing.
   verification verdict never depends on the build option.
 - `KnishIOClient::createMeta(metaType, metaId, meta)`: proposes an M-isotope meta molecule plus
   ContinuID, signed by the USER wallet at the live ContinuID position. Test `CreateMetaMolecule`.
+- CI job `gate-kcore`: the build, `cpp_self_test` and ctest with `KNISHIO_USE_KCORE=ON` against
+  the sha256-pinned kcore 0.1.0 linux-x64-gnu release package, on every push. The job also
+  asserts that configure reports `kcore: KnishIOCryptoCore 0.1.0`.
+- Thread-safety contract (README "Thread safety"; `KnishIOClient` class comment): a
+  `KnishIOClient` instance is not thread-safe, so use one per thread or guard a shared one with a
+  mutex; Wallet and Molecule signing/verification on separate objects are thread-safe.
+  Documentation only, no behaviour change.
+
+### Changed
+
+- The prebuilt release packages (`linux-x86_64`, `macos-arm64`) are built with
+  `KNISHIO_USE_KCORE=ON` against the sha256-pinned kcore 0.1.0 package for their platform
+  (linux-x64-gnu, darwin-universal) and bundle it in the same prefix: `include/kcore.h`,
+  `lib/libkcore.*`, `lib/cmake/KnishIOCryptoCore/`, and kcore's `LICENSE` under
+  `share/licenses/knishio-crypto-core/`. The installed `KnishIOClientCPPConfig.cmake` finds kcore
+  from that prefix. The source tarball and source builds keep `KNISHIO_USE_KCORE` OFF by default.
+
+### Notes
+
+- The bundled kcore includes its shared library (`libkcore.so*` / `libkcore*.dylib`) next to
+  `libkcore.a`, although the SDK links kcore statically: kcore's exported CMake targets import
+  both `KnishIO::kcore` and `KnishIO::kcore-static` and check that every referenced file exists,
+  so `find_package(KnishIOCryptoCore)` fails without it.
 
 ## [1.2.4] — 2026-09-29
 
@@ -384,7 +407,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.2.4...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.3.0...HEAD
+[1.3.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.0
 [1.2.4]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.4
 [1.2.3]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.3
 [1.2.2]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.2

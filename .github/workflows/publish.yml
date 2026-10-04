@@ -125,6 +125,27 @@ jobs:
           sudo ./llvm.sh 22
           sudo apt-get install -y clang-tidy-22
 
+      # The prebuilt packages are built with kcore (KNISHIO_USE_KCORE=ON) and bundle it, so a
+      # consumer's find_package(KnishIOClientCPP) resolves kcore from the same prefix. The kcore
+      # package is the pinned 0.1.0 release asset, checked by sha256 before extraction. Source
+      # builds (the `source` job below) keep the default, KNISHIO_USE_KCORE=OFF.
+      - name: Fetch kcore 0.1.0 (sha256-pinned)
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            linux-x86_64) TARGET=linux-x64-gnu;    SHA=57a3187c136cccbd64ed7dc7561745f9edba2697f42f9f5b47c4f66f1d0823b0 ;;
+            macos-arm64)  TARGET=darwin-universal; SHA=e75e4a9f24472f9602e41984b5f0b5c6d387284b6ca8bb1b116481b96fd7b950 ;;
+            *) echo "::error::no kcore package mapped for $PLATFORM"; exit 1 ;;
+          esac
+          PKG="knishio-crypto-core-0.1.0-$TARGET"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$PKG.tar.gz" \
+            "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.1.0/$PKG.tar.gz"
+          echo "$SHA  $RUNNER_TEMP/$PKG.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/kcore"
+          tar -xzf "$RUNNER_TEMP/$PKG.tar.gz" -C "$RUNNER_TEMP/kcore" --strip-components=1
+
       # KNISHIO_NATIVE_ARCH=OFF is load-bearing for a distributed artifact. The default
       # Release flags include -march=native -mtune=native, which target the BUILD host's
       # microarchitecture — a binary compiled on a GitHub runner would emit instructions
@@ -138,7 +159,8 @@ jobs:
             -DKNISHIO_NATIVE_ARCH=OFF \
             -DKNISHIO_BUILD_TESTS=ON \
             -DKNISHIO_BUILD_EXAMPLES=OFF \
-            -DCLANG_TIDY_EXE="$(command -v clang-tidy-22)"
+            -DCLANG_TIDY_EXE="$(command -v clang-tidy-22)" \
+            -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/kcore"
 
       - name: Configure (macOS)
         if: runner.os == 'macOS'
@@ -146,7 +168,8 @@ jobs:
           cmake -S . -B build \
             -DKNISHIO_NATIVE_ARCH=OFF \
             -DKNISHIO_BUILD_TESTS=ON \
-            -DKNISHIO_BUILD_EXAMPLES=OFF
+            -DKNISHIO_BUILD_EXAMPLES=OFF \
+            -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/kcore"
 
       - name: Build
         run: cmake --build build -j"$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )"
@@ -178,6 +201,18 @@ jobs:
           echo "STAGE_NAME=$STAGE_NAME" >> "$GITHUB_ENV"
           cmake --install build --prefix "dist/$STAGE_NAME"
           cp LICENSE README.md "dist/$STAGE_NAME/"
+          # Bundle kcore at the same relative paths: the SDK links it statically, and the
+          # installed KnishIOClientCPPConfig.cmake calls find_dependency(KnishIOCryptoCore),
+          # which resolves from this prefix. kcore's export set imports both KnishIO::kcore
+          # (shared) and KnishIO::kcore-static and checks that every referenced file exists, so
+          # the shared library ships next to libkcore.a.
+          K="$RUNNER_TEMP/kcore"
+          S="dist/$STAGE_NAME"
+          mkdir -p "$S/include" "$S/lib/cmake/KnishIOCryptoCore" "$S/share/licenses/knishio-crypto-core"
+          cp "$K/include/kcore.h" "$S/include/"
+          cp -P "$K"/lib/libkcore.* "$S/lib/"
+          cp "$K"/lib/cmake/KnishIOCryptoCore/* "$S/lib/cmake/KnishIOCryptoCore/"
+          cp "$K"/LICENSE* "$S/share/licenses/knishio-crypto-core/"
 
       # Every consumer path of the package, run on a relocated copy of the stage: each
       # installed header compiles on its own, packaging/consumer/main.cpp builds with plain

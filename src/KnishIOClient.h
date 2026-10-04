@@ -43,6 +43,10 @@ namespace knishio {
  * 
  * This class provides a high-level interface for common DLT operations,
  * including wallet management, token transfers, and molecular composition.
+ *
+ * A KnishIOClient instance is not thread-safe; use one instance per thread or guard a
+ * shared instance with a mutex. Wallet and Molecule signing/verification on separate
+ * objects are thread-safe.
  * 
  * @example
  * auto client = KnishIOClient::Builder()

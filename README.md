@@ -91,6 +91,13 @@ The ML-KEM (FIPS 203) implementation, providing both ML-KEM-768 and ML-KEM-1024,
    cmake -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=/path/to/knishio-crypto-core-0.1.0-linux-arm64-gnu ..
    ```
 
+   The prebuilt `knishio-client-cpp-<version>-<platform>.tar.gz` packages on the GitHub Releases
+   page are built with kcore (`KNISHIO_USE_KCORE=ON`) and bundle it: `include/kcore.h`,
+   `lib/libkcore.*` and `lib/cmake/KnishIOCryptoCore/` sit in the same prefix, with kcore's
+   license under `share/licenses/knishio-crypto-core/`, so `find_package(KnishIOClientCPP)`
+   resolves kcore without a separate download. Source builds take
+   `-DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=<kcore package>`; OFF is still the default.
+
 After installation, include the SDK in your project:
 
 ```cpp
@@ -536,6 +543,12 @@ Master secrets are stored at rest in the cross-SDK AES-256-GCM envelope (PBKDF2-
 | `AesGcmSecretStorageProvider` | `aes-gcm` | Software (`false`) | Any `StorageBackend` (`MemoryStorageBackend`, `FileStorageBackend` [0600]) | Optional |
 
 `hardwareBacked` is derived by the provider from the platform, never accepted from the caller; software providers always report `false`. A hardware provider refuses to store without a recovery passphrase unless `allowUnrecoverable` is set — the recovery envelope (`knishio:recovery:<bundleHash>`, `providerType: "aes-gcm"`) is *software* custody whose strength is bounded by that passphrase: enforce passphrase entropy or keep it on a second device.
+
+## Thread safety
+
+A KnishIOClient instance is not thread-safe; use one instance per thread or guard a shared instance with a mutex. Wallet and Molecule signing/verification on separate objects are thread-safe.
+
+Everything runs on the calling thread (kcore starts no threads of its own), so for multi-core throughput sign or verify independent molecules on separate threads.
 
 ## Getting Help
 

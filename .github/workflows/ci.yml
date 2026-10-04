@@ -96,6 +96,64 @@ jobs:
       - name: clang-tidy (lint gate)
         run: cmake --build build --target lint
 
+  # The same build with the KnishIO Crypto Core linked (KNISHIO_USE_KCORE=ON), so the kcore path
+  # the prebuilt release packages ship is proven on every push, not only at release. The kcore
+  # package is the pinned 0.1.0 release asset, checked by sha256 before it is extracted.
+  gate-kcore:
+    name: build + self-test (kcore)
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libsodium-dev libcurl4-openssl-dev \
+            lsb-release wget software-properties-common gnupg
+
+      - name: Install LLVM 22 (clang)
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+
+      - name: Fetch kcore 0.1.0 (linux-x64-gnu, sha256-pinned)
+        run: |
+          set -euo pipefail
+          PKG=knishio-crypto-core-0.1.0-linux-x64-gnu
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$PKG.tar.gz" \
+            "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.1.0/$PKG.tar.gz"
+          echo "57a3187c136cccbd64ed7dc7561745f9edba2697f42f9f5b47c4f66f1d0823b0  $RUNNER_TEMP/$PKG.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/kcore"
+          tar -xzf "$RUNNER_TEMP/$PKG.tar.gz" -C "$RUNNER_TEMP/kcore" --strip-components=1
+
+      - name: Configure (kcore ON)
+        run: |
+          set -euo pipefail
+          CC=clang-22 CXX=clang++-22 cmake -S . -B build-kcore \
+            -DKNISHIO_USE_KCORE=ON \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/kcore" \
+            -DKNISHIO_BUILD_TESTS=ON \
+            -DKNISHIO_BUILD_EXAMPLES=OFF | tee "$RUNNER_TEMP/configure-kcore.log"
+          grep -F 'kcore: KnishIOCryptoCore 0.1.0' "$RUNNER_TEMP/configure-kcore.log"
+
+      - name: Build
+        run: cmake --build build-kcore -j"$(nproc)"
+
+      - name: Self-test (frozen molecular hashes + ML-KEM768, kcore)
+        run: |
+          mkdir -p shared-test-results
+          KNISHIO_DISABLE_CROSS_VALIDATION=true \
+          KNISHIO_SHARED_RESULTS="$PWD/shared-test-results" \
+            ./build-kcore/cpp_self_test
+
+      - name: Unit tests (ctest, kcore)
+        run: ctest --test-dir build-kcore --output-on-failure
+
   changelog:
     name: changelog entry for version bump
     runs-on: ubuntu-latest
