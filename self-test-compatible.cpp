@@ -131,13 +131,11 @@ struct VectorTestResult {
     std::string error;
 };
 
-// No negative case is implemented in this self-test. This defaulted to passed = true with
-// testCount 3, so the results JSON claimed three anti-cheating checks had passed when none
-// had run. It is recorded as skipped with a count of 0.
+// Three anti-cheating cases; see testNegativeCases().
 struct NegativeTestResult {
     bool passed = false;
     bool skipped = false;
-    std::string description = "no negative cases implemented";
+    std::string description = "Anti-cheating validation tests";
     int testCount = 0;
 };
 
@@ -145,7 +143,7 @@ struct TestResults {
     std::string sdk = "C++";
     // Keep in step with project(VERSION) in CMakeLists.txt — the gauntlet's snapshot
     // coherence gate fails an SDK whose reported version disagrees with its manifest.
-    std::string version = "1.3.0";
+    std::string version = "1.3.1";
     std::string timestamp;
     CryptoTestResult crypto;
     MoleculeTestResult meta_creation;
@@ -1865,20 +1863,128 @@ private:
         }
     }
 
+    // Each case builds a transfer whose ONLY defect is the one under test, and passes only when
+    // the specific check for that defect rejects it (and Molecule::verify() with it). Setup and
+    // preconditions run inside the case, so a broken setup fails the case instead of passing it.
     bool testNegativeCases() {
         Logger::message("\n6. Negative Test Cases (Anti-Cheating)", colors::BLUE);
 
-        // Nothing is checked here. This printed two ✅ lines and returned true, and the
-        // results JSON claimed three passing anti-cheating checks. It is a skip, not a
-        // missing fixture, so it never fails the run (KNISHIO_REQUIRE_VECTORS included).
-        Logger::message("  ⏭️  No negative cases are implemented in the C++ self-test (0 checks run)", colors::YELLOW);
-        results_.negative_cases = {
-            .passed = false,
-            .skipped = true,
-            .description = "no negative cases implemented",
-            .testCount = 0
+        int passed = 0;
+        const int total = 3;
+
+        auto runCase = [&passed](const std::string& name, auto body) {
+            std::string reason;
+            try {
+                reason = body();
+            } catch (const std::exception& e) {
+                reason = std::string("threw: ") + e.what();
+            }
+            Logger::test(name, reason.empty(), reason);
+            if (reason.empty()) {
+                ++passed;
+            }
         };
-        return true;
+
+        try {
+            const auto secret = knishio::KnishIOClient::generateSecret(
+                config_["tests"]["crypto"]["seed"].get<std::string>());
+
+            // 1000 debited from the source; `amount` to a different wallet; the rest to a
+            // remainder. `remainderOverride`, if set, replaces the remainder value BEFORE signing.
+            auto build = [&secret](const std::string& amount, const std::string& remainderOverride, bool sign) {
+                Wallet source(secret, "TEST", "0123456789abcdeffedcba9876543210fedcba9876543210fedcba9876543210");
+                source.balance = "1000";
+                Wallet recipient(secret, "TEST", "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef");
+                Wallet remainder(secret, "TEST", "bbbb000000000000cccc111111111111dddd222222222222eeee333333333333");
+
+                Molecule molecule;
+                molecule.sourceWallet = std::make_shared<Wallet>(source);
+                molecule.remainderWallet = std::make_shared<Wallet>(remainder);
+                molecule.initValue(source, recipient, remainder, amount);
+                if (!remainderOverride.empty()) {
+                    molecule.atoms.at(2).value = remainderOverride;
+                }
+                setFixedTimestamps(molecule);
+                if (sign) {
+                    molecule.sign(secret, false);
+                }
+                return molecule;
+            };
+
+            // 1. Never signed: a balanced transfer with no molecular hash at all.
+            runCase("Missing molecular hash validation (should FAIL)", [&]() -> std::string {
+                auto molecule = build("1000", "", false);
+                if (!molecule.molecularHash.empty()) {
+                    return "precondition: molecularHash should be empty, is " + molecule.molecularHash;
+                }
+                if (Molecule::verifyMolecularHash(molecule)) {
+                    return "expected verifyMolecularHash()=false, got true";
+                }
+                if (Molecule::verify(molecule)) {
+                    return "expected verify()=false, got true";
+                }
+                return "";
+            });
+
+            // 2. Signed and verified, then one character of the declared hash changed, so it no
+            //    longer equals the hash recomputed from the atoms.
+            runCase("Invalid molecular hash validation (should FAIL)", [&]() -> std::string {
+                auto molecule = build("1000", "", true);
+                if (!Molecule::verify(molecule)) {
+                    return "precondition: the uncorrupted molecule does not verify";
+                }
+                molecule.molecularHash[0] = (molecule.molecularHash[0] == '0') ? '1' : '0';
+                if (molecule.molecularHash == Atom::hashAtomsBase17(molecule.atoms)) {
+                    return "precondition: the corrupted hash still matches the atoms";
+                }
+                if (Molecule::verifyMolecularHash(molecule)) {
+                    return "expected verifyMolecularHash()=false, got true";
+                }
+                if (Molecule::verify(molecule)) {
+                    return "expected verify()=false, got true";
+                }
+                return "";
+            });
+
+            // 3. -1000 / +500 / +100, signed over those atoms: hash and signature are valid, the
+            //    V atoms do not sum to zero.
+            runCase("Unbalanced transfer validation (should FAIL)", [&]() -> std::string {
+                auto molecule = build("500", "100", true);
+                long long sum = 0;
+                for (const auto& atom : molecule.atoms) {
+                    if (atom.isotope == "V") {
+                        sum += std::stoll(atom.value);
+                    }
+                }
+                if (sum == 0) {
+                    return "precondition: the V atoms balance";
+                }
+                if (!Molecule::verifyMolecularHash(molecule)) {
+                    return "precondition: the molecular hash does not verify";
+                }
+                if (!Molecule::verifyOts(molecule)) {
+                    return "precondition: the one-time signature does not verify";
+                }
+                if (Molecule::verifyTokenIsotopeV(molecule)) {
+                    return "expected verifyTokenIsotopeV()=false, got true";
+                }
+                if (Molecule::verify(molecule)) {
+                    return "expected verify()=false, got true";
+                }
+                return "";
+            });
+        } catch (const std::exception& e) {
+            std::cout << "  " << colors::RED << "❌ ERROR: " << e.what() << colors::RESET << '\n';
+        }
+
+        const bool all_passed = (passed == total);
+        results_.negative_cases = {
+            .passed = all_passed,
+            .skipped = false,
+            .description = "Anti-cheating validation tests",
+            .testCount = total
+        };
+        return all_passed;
     }
     
     bool testCrossSdkValidation() {

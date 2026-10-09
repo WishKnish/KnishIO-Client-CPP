@@ -14,6 +14,22 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [1.3.1] — 2026-10-09
+
+### Fixed
+
+- The self-test's negative (anti-cheating) section ran no checks: it printed a skip, and
+  `cpp-results.json` reported `negativeCases` as `skipped: true, testCount: 0`. It now runs
+  three cases, each passing only on its own rejection:
+  - an unsigned transfer (empty molecular hash) must fail `Molecule::verifyMolecularHash`;
+  - a signed transfer whose hash has one character changed must fail it, after its
+    uncorrupted control verified;
+  - a signed −1000/+500/+100 transfer must fail `Molecule::verifyTokenIsotopeV`, while its
+    hash and one-time signature verify.
+
+  `Molecule::verify` must reject all three. `negativeCases` now reports `testCount: 3`. The
+  library is unchanged.
+
 ## [1.3.0] — 2026-10-04
 
 ### Added
@@ -407,7 +423,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.3.0...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.3.1...HEAD
+[1.3.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.1
 [1.3.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.0
 [1.2.4]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.4
 [1.2.3]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.3
