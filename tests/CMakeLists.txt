@@ -170,6 +170,43 @@ set_tests_properties(WotsSignatureParity PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:wots_signature_parity>
 )
 
+# OTS v2 (64-chain WOTS+). OtsV2RoundTrip always runs. OtsV2Vectors reads the shared OTS v2
+# vectors from the monorepo (KNISHIO_OTS_V2_VECTORS overrides the path); a standalone checkout
+# has none, so the binary exits 77 and CTest reports the entry as skipped.
+add_executable(ots_v2_vectors ots_v2_vectors.cpp)
+target_link_libraries(ots_v2_vectors
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(ots_v2_vectors PRIVATE cxx_std_20)
+target_compile_definitions(ots_v2_vectors PRIVATE
+    KNISHIO_OTS_V2_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../shared-test-results/ots-v2-vectors.json"
+)
+set_target_properties(ots_v2_vectors PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME OtsV2RoundTrip
+    COMMAND ots_v2_vectors roundtrip
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(OtsV2RoundTrip PROPERTIES
+    LABELS "crypto;signature;ots"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
+)
+add_test(
+    NAME OtsV2Vectors
+    COMMAND ots_v2_vectors vectors
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(OtsV2Vectors PROPERTIES
+    LABELS "crypto;signature;vectors;ots"
+    TIMEOUT 120
+    SKIP_RETURN_CODE 77
+    REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
+)
+
 # The OTS check compares the recovered address with atoms[0].walletAddress only. The shared
 # cross-SDK forgery fixture (built by JS 1.2.1) carries a molecule that claims a victim's
 # address, is signed by another wallet, and names that signer in a `signingWallet` meta: it must

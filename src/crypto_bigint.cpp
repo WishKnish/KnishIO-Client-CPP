@@ -38,7 +38,7 @@ void CryptoBigInt::fromHexString(const std::string& hex_str) {
     
     // Validate hex string
     for (char c : hex_str) {
-        if (!std::isxdigit(c)) {
+        if (!std::isxdigit(static_cast<unsigned char>(c))) {
             throw std::invalid_argument("Invalid hex character: " + std::string(1, c));
         }
     }
@@ -207,7 +207,20 @@ bool WalletCrypto::isValidHex(const std::string& hex_str) {
     }
     
     for (char c : hex_str) {
-        if (!std::isxdigit(c)) {
+        if (!std::isxdigit(static_cast<unsigned char>(c))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool WalletCrypto::isSignableHash(const std::string& hash) {
+    if (hash.size() != 64) {
+        return false;
+    }
+    for (const char ch : hash) {
+        const auto c = static_cast<unsigned char>(ch);
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'g'))) {
             return false;
         }
     }

@@ -14,9 +14,9 @@
  *     KnishIO-Client-JS, whose otsFragments six other SDKs reproduced byte-identically.
  *   - `legacyMlkem768AuthMolecule` is a second, structurally different (U+I) signed molecule.
  *
- * The acceptance rule under test is the reference's, not a stricter local one: a 2048-char hex
- * OTS is taken as-is, anything else must base64-decode to exactly 2048 hex. C++ must not reject
- * a molecule the JS reference, the C SDK or the Rust validator would accept.
+ * The acceptance rule under test is the reference's, not a stricter local one: a 2048- or
+ * 8192-char hex OTS is taken as-is, anything else must base64-decode to exactly 2048 or 8192 hex.
+ * C++ must not reject a molecule the JS reference, the C SDK or the Rust validator would accept.
  */
 #include <algorithm>
 #include <cstdlib>
@@ -31,6 +31,7 @@
 #include "Wallet.h"
 #include "utility.h"
 #include "third_party/nlohmann/json.hpp"
+#include "exception/KnishIOException.h"
 
 using json = nlohmann::json;
 using KnishIO::Atom;
@@ -49,6 +50,20 @@ void check(bool ok, const std::string& name, const std::string& detail = {}) {
     std::cout << std::endl;
     if (!ok) {
         ++failures;
+    }
+}
+
+// verifyOts() throws on failure; this names the outcome so assertions can pin the error type.
+std::string otsOutcome(const Molecule& molecule) {
+    try {
+        Molecule::verifyOts(molecule);
+        return "ok";
+    } catch (const knishio::SignatureMalformedException&) {
+        return "SignatureMalformed";
+    } catch (const knishio::SignatureMismatchException&) {
+        return "SignatureMismatch";
+    } catch (const std::exception& e) {
+        return std::string("threw: ") + e.what();
     }
 }
 
@@ -134,13 +149,13 @@ int main() {
     //     that did not exist before: 1368 base64 chars -> 2048 hex -> 16 chunks of 128.
     try {
         const Molecule molecule = Molecule::jsonToObject(frozenMolecule.dump());
-        check(Molecule::verifyOts(molecule),
+        check(otsOutcome(molecule) == "ok",
               "verifyOts() accepts the frozen JS-signed base64 OTS (684/684)",
               "fragment lengths " + fragmentLengths(molecule));
         check(Molecule::verify(molecule),
               "verify() accepts it end to end (hash + isotope + OTS)",
               "verifyMolecularHash=" + std::string(Molecule::verifyMolecularHash(molecule) ? "true" : "false") +
-                  " verifyOts=" + std::string(Molecule::verifyOts(molecule) ? "true" : "false"));
+                  " verifyOts=" + otsOutcome(molecule));
     } catch (const std::exception& e) {
         check(false, "verifyOts() accepts the frozen JS-signed base64 OTS (684/684)",
               std::string("threw: ") + e.what());
@@ -171,9 +186,9 @@ int main() {
         tampered["atoms"][1]["otsFragment"] = fragment;
 
         const Molecule molecule = Molecule::jsonToObject(tampered.dump());
-        check(!Molecule::verifyOts(molecule),
-              "verifyOts() rejects a single flipped OTS character",
-              "accepted a tampered signature");
+        check(otsOutcome(molecule) == "SignatureMismatch",
+              "verifyOts() rejects a single flipped OTS character with SignatureMismatchException",
+              "got " + otsOutcome(molecule));
         check(!Molecule::verify(molecule),
               "verify() rejects it too, so the OTS leg is actually wired in",
               "verify() accepted a forged signature; verifyMolecularHash=" +
@@ -185,8 +200,6 @@ int main() {
 
     // (4) Malformed length. Dropping one whole base64 group (4 chars) drops 3 signature bytes,
     //     so the OTS decodes to 2046 hex and the reference raises SignatureMalformedException.
-    //     Note one or two trailing characters would NOT do: `Xy==` and `Xy` decode to the same
-    //     byte, in the reference decoder as well as ours, so such a truncation is not malformed.
     try {
         json truncated = frozenMolecule;
         std::string fragment = truncated.at("atoms").at(1).at("otsFragment").get<std::string>();
@@ -195,9 +208,9 @@ int main() {
 
         const Molecule molecule = Molecule::jsonToObject(truncated.dump());
         const std::string decoded = base64ToHex(joinFragments(molecule));
-        check(decoded.size() != 2048 && !Molecule::verifyOts(molecule),
+        check(decoded.size() != 2048 && otsOutcome(molecule) == "SignatureMalformed",
               "verifyOts() rejects an OTS that does not decode to 2048 hex",
-              "decoded to " + std::to_string(decoded.size()) + " hex chars");
+              "decoded to " + std::to_string(decoded.size()) + " hex chars; got " + otsOutcome(molecule));
     } catch (const std::exception& e) {
         check(false, "verifyOts() rejects an OTS that does not decode to 2048 hex",
               std::string("threw: ") + e.what());
@@ -215,7 +228,7 @@ int main() {
         uncompressed["atoms"][1]["otsFragment"] = hex.substr(1024);
 
         const Molecule molecule = Molecule::jsonToObject(uncompressed.dump());
-        check(hex.size() == 2048 && Molecule::verifyOts(molecule),
+        check(hex.size() == 2048 && otsOutcome(molecule) == "ok",
               "verifyOts() still accepts the uncompressed 2048-hex form (1024/1024)",
               "hex length " + std::to_string(hex.size()));
     } catch (const std::exception& e) {
@@ -258,7 +271,7 @@ int main() {
               "ends in '" + joined.substr(joined.size() >= 2 ? joined.size() - 2 : 0) + "'");
         check(Molecule::verify(molecule),
               "the molecule it just signed verifies, OTS leg included",
-              "verifyOts=" + std::string(Molecule::verifyOts(molecule) ? "true" : "false"));
+              "verifyOts=" + otsOutcome(molecule));
     } catch (const std::exception& e) {
         check(false, "sign() emits a 1368-char base64 OTS chunked 684/684 across 2 atoms",
               std::string("threw: ") + e.what());
@@ -310,7 +323,7 @@ int main() {
               "lengths " + fragmentLengths(molecule) + ", total " +
                   std::to_string(joinFragments(molecule).size()));
         check(Molecule::verify(molecule), "the 7-atom molecule verifies, OTS leg included",
-              "verifyOts=" + std::string(Molecule::verifyOts(molecule) ? "true" : "false"));
+              "verifyOts=" + otsOutcome(molecule));
     } catch (const std::exception& e) {
         check(false, "ceil chunking gives [196 x6, 192], not round()'s 8 chunks of 195",
               std::string("threw: ") + e.what());

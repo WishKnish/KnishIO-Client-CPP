@@ -20,11 +20,14 @@ namespace KnishIO {
    * @param {string} token - slug for the token this wallet is intended for
    * @param {string | null} position - hexadecimal string used to salt the secret and produce one-time signatures
    * @param {number} saltLength - length of the position parameter that should be generated if position is not provided
+   * @param {number} mlkemParameterSet - ML-KEM parameter set (768 or 1024)
+   * @param {number} otsVersion - OTS key version: 1 (16 chains, default) or 2 (64 chains)
    */
-Wallet::Wallet(const std::string &secret, const std::string &token, const std::string &position, size_t saltLength, int mlkemParameterSet)
+Wallet::Wallet(const std::string &secret, const std::string &token, const std::string &position, size_t saltLength, int mlkemParameterSet, int otsVersion)
 	: position(position)
 	, token(token)
 	, mlkem_parameter_set(mlkemParameterSet)
+	, ots_version(Wallet::checkedOtsVersion(otsVersion))
 {
 	// Position via which (combined with token) we will generate the one-time keys
 	if (this->position.empty())
@@ -33,7 +36,7 @@ Wallet::Wallet(const std::string &secret, const std::string &token, const std::s
 	}
 
 	// Position via which (combined with token) we will generate the one-time keys
-	this->key = Wallet::generateWalletKey(secret, this->token, this->position);
+	this->key = Wallet::generateWalletKey(secret, this->token, this->position, this->ots_version);
 
 	this->address = Wallet::generateWalletAddress(this->key);
 	this->bundle = generateBundleHash(secret);
@@ -95,77 +98,110 @@ std::string Wallet::generateBundleHash(const std::string &secret)
 	return shake256Hex(secret, 256);
 }
 
+int Wallet::checkedOtsVersion(int otsVersion)
+{
+	if (otsVersion != 1 && otsVersion != 2) {
+		throw std::invalid_argument("KnishIO: unsupported OTS version " + std::to_string(otsVersion) + "; expected 1 or 2.");
+	}
+	return otsVersion;
+}
+
 /**
+   * Derives the OTS private key: 2048 hex (v1, 16 chains) or 8192 hex (v2, 64 chains).
+   * A non-hex secret or position is first hashed with SHAKE256 (1024 / 256 bits).
    *
    * @param {string} secret
    * @param {string} token
    * @param {string} position
+   * @param {number} otsVersion - 1 or 2
    * @return {string}
    */
-std::string Wallet::generateWalletKey(const std::string &secret, const std::string &token, const std::string &position)
+std::string Wallet::generateWalletKey(const std::string &secret, const std::string &token, const std::string &position, int otsVersion)
 {
+	const int version = Wallet::checkedOtsVersion(otsVersion);
+	if (secret.empty()) {
+		throw std::invalid_argument("Wallet::generateWalletKey() - Secret is required!");
+	}
+	if (position.empty()) {
+		throw std::invalid_argument("Wallet::generateWalletKey() - Position is required!");
+	}
+
 	try {
 		// SECURITY: Using constant-time BigInt operations to prevent timing attacks
 		// This replaces the vulnerable BigInt::Rossi operations that could leak timing information
-		
-		// Validate inputs are valid hex strings
-		if (!knishio::WalletCrypto::isValidHex(secret)) {
-			throw std::invalid_argument("Secret must be a valid hexadecimal string");
-		}
-		if (!knishio::WalletCrypto::isValidHex(position)) {
-			throw std::invalid_argument("Position must be a valid hexadecimal string");
-		}
-		
+
+		// Stage 0: a non-hex secret or position is normalized via SHAKE256
+		std::string secretHex = knishio::WalletCrypto::isValidHex(secret) ? secret : shake256Hex(secret, 1024);
+		const std::string positionHex = knishio::WalletCrypto::isValidHex(position) ? position : shake256Hex(position, 256);
+
 		// Constant-time addition of secret and position
-		std::string indexedKeyHex = knishio::WalletCrypto::constantTimeHexAdd(secret, position);
-		
+		std::string indexedKeyHex = knishio::WalletCrypto::constantTimeHexAdd(secretHex, positionHex);
+
 		// Prepare intermediate key sponge
 		std::string intermediateKeySponge;
-		intermediateKeySponge.reserve(indexedKeyHex.length() + token.length());
-		intermediateKeySponge.append(indexedKeyHex);
-
-		if (!token.empty()) {
+		if (version == 2) {
+			// v2 absorbs a domain-tagged, delimited input
+			intermediateKeySponge.reserve(indexedKeyHex.length() + token.length() + 16);
+			intermediateKeySponge.append("KnishIO-OTS-v2|");
+			intermediateKeySponge.append(indexedKeyHex);
+			intermediateKeySponge.append("|");
 			intermediateKeySponge.append(token);
+		} else {
+			intermediateKeySponge.reserve(indexedKeyHex.length() + token.length());
+			intermediateKeySponge.append(indexedKeyHex);
+			if (!token.empty()) {
+				intermediateKeySponge.append(token);
+			}
 		}
 
-		// Generate the private key using double SHAKE256 hashing
-		std::string result = shake256Hex(shake256Hex(intermediateKeySponge, 8192), 8192);
-		
+		// Generate the private key using double SHAKE256 hashing: 16 chunks (v1) or 64 (v2)
+		std::string result = shake256Hex(shake256Hex(intermediateKeySponge, 8192), version == 2 ? 32768 : 8192);
+
 		// Securely clear sensitive intermediate values
+		if (!secretHex.empty()) {
+			sodium_memzero(secretHex.data(), secretHex.size());
+		}
 		if (!indexedKeyHex.empty()) {
-			sodium_memzero(const_cast<char*>(indexedKeyHex.data()), indexedKeyHex.size());
+			sodium_memzero(indexedKeyHex.data(), indexedKeyHex.size());
 		}
 		if (!intermediateKeySponge.empty()) {
-			sodium_memzero(const_cast<char*>(intermediateKeySponge.data()), intermediateKeySponge.size());
+			sodium_memzero(intermediateKeySponge.data(), intermediateKeySponge.size());
 		}
-		
+
 		return result;
-		
+
 	} catch (const std::exception& e) {
 		throw std::runtime_error("Wallet key generation failed: " + std::string(e.what()));
 	}
 }
 
 /**
-  * @param {string} key
+  * @param {string} key - 2048 hex (v1) or 8192 hex (v2)
   * @return {string}
   */
 std::string Wallet::generateWalletAddress(const std::string &key)
 {
-#ifdef KNISHIO_HAVE_KCORE
-	std::string viaKcore;
-	if (kcore_bridge::wotsAddress(key, viaKcore))
-	{
-		return viaKcore;
-	}
-#endif
-
-	// Subdivide private key into 16 fragments of 128 characters each
+	// Subdivide private key into 128-character fragments: 16 (v1) or 64 (v2)
 	auto keyFragments = chunkSubstr(key, 128);
 
 	// Generating wallet digest
 	std::string digestSponge;
 
+#ifdef KNISHIO_HAVE_KCORE
+	if (key.size() == 2048)
+	{
+		std::string viaKcore;
+		if (kcore_bridge::wotsAddress(key, viaKcore))
+		{
+			return viaKcore;
+		}
+	}
+	else if (key.size() == 8192 && !kcore_bridge::chainsHex(keyFragments, std::vector<int>(keyFragments.size(), 16), digestSponge))
+	{
+		digestSponge.clear();
+	}
+	if (digestSponge.empty())
+#endif
 	for (auto &workingFragment : keyFragments)
 	{
 		for (int i = 1; i <= 16; i++)

@@ -136,6 +136,11 @@ public:
      * @return true if valid hex, false otherwise
      */
     static bool isValidHex(const std::string& hex_str);
+
+    /**
+     * True when the value is exactly 64 characters from [0-9a-g] (a signable molecular hash)
+     */
+    static bool isSignableHash(const std::string& hash);
     
 private:
     /**

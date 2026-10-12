@@ -1962,7 +1962,9 @@ private:
                 if (!Molecule::verifyMolecularHash(molecule)) {
                     return "precondition: the molecular hash does not verify";
                 }
-                if (!Molecule::verifyOts(molecule)) {
+                try {
+                    Molecule::verifyOts(molecule);
+                } catch (const std::exception&) {
                     return "precondition: the one-time signature does not verify";
                 }
                 if (Molecule::verifyTokenIsotopeV(molecule)) {

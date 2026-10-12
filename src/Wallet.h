@@ -11,7 +11,7 @@ namespace KnishIO {
 class Wallet
 {
 public:
-	Wallet(const std::string &secret, const std::string &token = "USER", const std::string &position = {}, size_t saltLength = 64, int mlkemParameterSet = 1024);
+	Wallet(const std::string &secret, const std::string &token = "USER", const std::string &position = {}, size_t saltLength = 64, int mlkemParameterSet = 1024, int otsVersion = 1);
 	~Wallet();
 
 	bool generateMyPublicAndPrivateKeys();
@@ -58,7 +58,9 @@ private:
 public:
 
 	static std::string generateBundleHash(const std::string &secret);
-	static std::string generateWalletKey(const std::string &secret, const std::string &token, const std::string &position);
+	static std::string generateWalletKey(const std::string &secret, const std::string &token, const std::string &position, int otsVersion = 1);
+	// Returns otsVersion when it is 1 or 2; otherwise throws std::invalid_argument.
+	static int checkedOtsVersion(int otsVersion);
 	static std::string generateWalletAddress(const std::string &key);
 
 	// Stackable (NFT) token units. splitUnits partitions this wallet's units across the SENT set
@@ -89,6 +91,7 @@ public:
 	std::vector<uint8_t> mlkem_public_key;
 	std::vector<uint8_t> mlkem_private_key;
 	int mlkem_parameter_set = 1024;
+	int ots_version = 1;   // OTS key version: 1 (16 chains) or 2 (64 chains)
 };
 
 } // namespace KnishIO

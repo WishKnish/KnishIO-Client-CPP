@@ -14,6 +14,42 @@ This file was backfilled on 2026-07-27 from the repository's own tag and commit
 history rather than written at release time; where the history does not
 substantiate a detail, the entry says so instead of guessing.
 
+## [Unreleased]
+
+### Added
+
+- Opt-in OTS v2 one-time signatures (64 chains, 8192-hex key, 5464-char base64 signature):
+  - `Wallet(secret, token, position, saltLength, mlkemParameterSet, otsVersion = 1)` and the
+    public `Wallet::ots_version` member (1 or 2);
+  - `Wallet::generateWalletKey(secret, token, position, otsVersion = 1)` and
+    `Wallet::checkedOtsVersion(otsVersion)`; any other version throws `std::invalid_argument`
+    (`KnishIO: unsupported OTS version <n>; expected 1 or 2.`);
+  - `Molecule::signingOtsVersion()`: the source wallet's version, or 1 without one.
+    `Molecule::sign` derives its key at that version.
+- `knishio::SignatureMalformedException` and `knishio::SignatureMismatchException`, both
+  derived from `MoleculeException`.
+- `knishio::WalletCrypto::isSignableHash(hash)`: true for exactly 64 characters of `[0-9a-g]`.
+- `tests/ots_v2_vectors.cpp`, registered as `OtsV2RoundTrip` (always runs) and `OtsV2Vectors`
+  (the shared OTS v2 vectors; skipped with exit code 77 in a standalone checkout).
+
+### Changed
+
+- `Molecule::verifyOts` returns `void` and verifies v1 and v2 signatures (2048 or 8192 hex, or
+  their strict base64 form). It throws `SignatureMalformedException` for a molecular hash that
+  is not 64 characters of `[0-9a-g]` or a malformed signature, and `SignatureMismatchException`
+  when the signature does not match `atoms[0].walletAddress`. Callers that tested its `bool`
+  result must catch these instead. `Molecule::verify` still returns `false` on either.
+- `Molecule::check` lets both exceptions propagate unchanged, and
+  `KnishIOClient::submitMolecule` rethrows any `MoleculeException` unchanged.
+- `Molecule::sign` throws `SignatureMalformedException` when the molecular hash is not 64
+  characters of `[0-9a-g]`.
+- `Wallet::generateWalletKey` hashes a non-hex secret (SHAKE256, 1024 bits) or non-hex position
+  (SHAKE256, 256 bits) instead of rejecting it, matching the other SDKs. An empty secret or
+  position still throws `std::invalid_argument`.
+- Remainder, buffer and burn wallets that `KnishIOClient` builds alongside a source wallet use
+  the source wallet's OTS version.
+- Hex and character-class checks cast to `unsigned char` before calling `std::isxdigit`.
+
 ## [1.3.1] — 2026-10-09
 
 ### Fixed

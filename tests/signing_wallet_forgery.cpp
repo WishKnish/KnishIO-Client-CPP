@@ -9,8 +9,8 @@
  * one-time signature, and a `signingWallet` meta on atoms[0] naming B. JS 1.2.1 accepts both;
  * a verifier that honours the meta accepts a molecule claiming A's address that A never signed.
  *
- * C++ has no SignatureMismatchException: Molecule::verifyOts() returning false is the SDK's
- * signature-mismatch verdict, and Molecule::verify() folds it in.
+ * Molecule::verifyOts() raises knishio::SignatureMismatchException for a signature that does
+ * not match atoms[0].walletAddress, and Molecule::verify() folds it into false.
  */
 #include <fstream>
 #include <iostream>
@@ -18,6 +18,7 @@
 
 #include "Molecule.h"
 #include "third_party/nlohmann/json.hpp"
+#include "exception/KnishIOException.h"
 
 using json = nlohmann::json;
 using KnishIO::Molecule;
@@ -37,10 +38,23 @@ void check(bool ok, const std::string& name, const std::string& detail = {}) {
     }
 }
 
+std::string otsOutcome(const Molecule& molecule) {
+    try {
+        Molecule::verifyOts(molecule);
+        return "ok";
+    } catch (const knishio::SignatureMalformedException&) {
+        return "SignatureMalformed";
+    } catch (const knishio::SignatureMismatchException&) {
+        return "SignatureMismatch";
+    } catch (const std::exception& e) {
+        return std::string("threw: ") + e.what();
+    }
+}
+
 std::string verdicts(const Molecule& molecule) {
     return "verifyMolecularHash=" + std::string(Molecule::verifyMolecularHash(molecule) ? "true" : "false") +
            " verifyTokenIsotopeV=" + std::string(Molecule::verifyTokenIsotopeV(molecule) ? "true" : "false") +
-           " verifyOts=" + std::string(Molecule::verifyOts(molecule) ? "true" : "false");
+           " verifyOts=" + otsOutcome(molecule);
 }
 
 json loadFixture() {
@@ -100,11 +114,11 @@ int main() {
         // it verifies. So a rejection below is the address mismatch, not a malformed signature.
         Molecule asAttacker = forged;
         asAttacker.atoms.front().walletAddress = attackerAddress;
-        check(Molecule::verifyOts(asAttacker), "forged: the OTS is the attacker's valid signature over this hash");
+        check(otsOutcome(asAttacker) == "ok", "forged: the OTS is the attacker's valid signature over this hash");
 
-        check(!Molecule::verifyOts(forged),
-              "forged: Molecule::verifyOts() rejects it (signature mismatch against the victim address)",
-              "the signingWallet meta redirected the address check to the attacker");
+        check(otsOutcome(forged) == "SignatureMismatch",
+              "forged: Molecule::verifyOts() rejects it (SignatureMismatchException against the victim address)",
+              "got " + otsOutcome(forged));
         check(!Molecule::verify(forged), "forged: Molecule::verify() fails", verdicts(forged));
     } catch (const std::exception& e) {
         check(false, "forged: loads and is rejected", std::string("threw: ") + e.what());

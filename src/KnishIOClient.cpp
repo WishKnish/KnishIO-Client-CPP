@@ -157,7 +157,7 @@ void KnishIOClient::setSecret(const std::string& secret) {
     
     // Validate hexadecimal format
     if (!std::all_of(secret.begin(), secret.end(), 
-        [](char c) { return std::isxdigit(c); })) {
+        [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; })) {
         throw KnishIOException("Secret must be a hexadecimal string");
     }
     
@@ -343,6 +343,8 @@ KnishIOClient::submitMolecule(KnishIO::Molecule& mol, bool checkBeforeSend) {
             Molecule::check(mol);
         } catch (const AtomsNotFoundException&) {
             throw;
+        } catch (const MoleculeException&) {
+            throw;   // typed OTS errors (SignatureMalformed / SignatureMismatch) keep their type
         } catch (const std::runtime_error& e) {
             throw KnishIOException(e.what());
         }
@@ -512,7 +514,7 @@ KnishIOClient::createToken(const std::string& token,
         const std::string livePos = resolveContinuIdPosition(bundle);
         Wallet source(sec, "USER", livePos);   // livePos == "" -> fresh random (genesis)
         Wallet recipient(sec, token);          // new-token wallet, fresh random position
-        Wallet remainder(sec, "USER");         // fresh random remainder
+        Wallet remainder(sec, "USER", "", 64, 1024, source.ots_version);   // fresh random remainder
 
         std::vector<std::pair<std::string, std::string>> tokenMeta;
         tokenMeta.reserve(meta.size() + 3);
@@ -568,7 +570,7 @@ KnishIOClient::createWallet(const std::string& token) {
         const std::string livePos = resolveContinuIdPosition(getBundle());
         Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
         Wallet newWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet);          // the wallet being defined (fresh position)
-        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);         // fresh remainder (relay race)
+        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);   // fresh remainder (relay race)
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
         mol.sourceWallet = std::make_shared<Wallet>(source);
@@ -589,7 +591,7 @@ KnishIOClient::createMeta(const std::string& metaType, const std::string& metaId
 
         const std::string livePos = resolveContinuIdPosition(getBundle());
         Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
-        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);     // fresh remainder (relay race)
+        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);   // fresh remainder (relay race)
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
         mol.sourceWallet = std::make_shared<Wallet>(source);
@@ -611,7 +613,7 @@ KnishIOClient::claimShadowWallet(const std::string& token, const std::string& ba
         Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
         Wallet claimWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet);        // the shadow wallet being claimed
         claimWallet.batchId = batchId;         // -> walletBatchId meta (validator matches by it)
-        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet);         // fresh remainder
+        Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);   // fresh remainder
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
         mol.sourceWallet = std::make_shared<Wallet>(source);
@@ -664,7 +666,7 @@ KnishIOClient::transferToken(const std::string& bundleHash,
 
         // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - amount); the
         //    validator registers it, advancing the sender's chain.
-        Wallet remainder(sec, token);
+        Wallet remainder(sec, token, "", 64, 1024, source.ots_version);
 
         // Stackable (NFT) transfer: partition the source's tokenUnits → source + recipient get the
         // SENT units, remainder gets the KEPT units. No-op for fungible (units empty). Must run
@@ -739,7 +741,7 @@ KnishIOClient::transferTokens(const std::string& token,
         }
 
         // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - total)
-        Wallet remainder(sec, token);
+        Wallet remainder(sec, token, "", 64, 1024, source.ots_version);
 
         // 4. Stackable (NFT): partition the source's units → source keeps the SENT union, each
         //    recipient its subset, remainder the KEPT. No-op for fungible. Must run before initValues.
@@ -792,13 +794,13 @@ KnishIOClient::burnToken(const std::string& token, double amount, const std::vec
         // BURN TARGET: the all-zeros bundle = token destruction. No secret -> no position/address;
         // NO batchId (a batchId would make it a claimable shadow). The validator credits the burn
         // amount to this unspendable bundle, satisfying conservation while destroying the tokens.
-        Wallet burnWallet(sec, token);
+        Wallet burnWallet(sec, token, "", 64, 1024, source.ots_version);
         burnWallet.bundle = "0000000000000000000000000000000000000000000000000000000000000000";
         burnWallet.address = "";
         burnWallet.position = "";
 
         // REMAINDER: a fresh same-token wallet holding (balance - amount).
-        Wallet remainder(sec, token);
+        Wallet remainder(sec, token, "", 64, 1024, source.ots_version);
 
         // Stackable (NFT) burn: partition the source's tokenUnits → source keeps the BURNED units,
         // remainder keeps the rest (no recipient — the units are destroyed). No-op for fungible.
@@ -843,10 +845,10 @@ KnishIOClient::depositBufferToken(const std::string& token, double amount,
         source.balance = src.balance;             // initDepositBuffer debits the full balance (UTXO)
 
         // BUFFER: a FRESH same-token wallet that receives the deposited amount (B-isotope).
-        Wallet buffer(sec, token);
+        Wallet buffer(sec, token, "", 64, 1024, source.ots_version);
 
         // REMAINDER: a FRESH same-token wallet holding (balance - amount).
-        Wallet remainder(sec, token);
+        Wallet remainder(sec, token, "", 64, 1024, source.ots_version);
 
         // V-B-V buffer-deposit molecule (NO ContinuID I-atom).
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
@@ -898,7 +900,7 @@ KnishIOClient::withdrawBufferToken(const std::string& token, double amount, cons
 
         // REMAINDER: a FRESH position (S.createRemainder): value credited at S's consumed signing
         // position would be stranded, and validator 0.6.1 rejects it.
-        Wallet remainder(sec, token, "", 64, mlKem);
+        Wallet remainder(sec, token, "", 64, mlKem, source->ots_version);
         remainder.batchId = source->batchId;
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
@@ -929,7 +931,7 @@ KnishIOClient::replenishToken(const std::string& token, double amount, const std
         // Signed like createToken: the USER wallet at the live ContinuID pointer, a fresh USER remainder.
         const std::string bundle = getBundle();
         Wallet source(sec, "USER", resolveContinuIdPosition(bundle), 64, mlKem);
-        Wallet remainder(sec, "USER", "", 64, mlKem);
+        Wallet remainder(sec, "USER", "", 64, mlKem, source.ots_version);
 
         // CREDITED: the identity's existing wallet for the token, or a new one.
         TokenWalletInfo existing = resolveTokenWallet(bundle, token);
@@ -981,7 +983,7 @@ KnishIOClient::fuseToken(const std::string& bundleHash, const std::string& token
             recipient.address = "";
             recipient.position = "";
         }
-        Wallet remainder(sec, tokenSlug, "", 64, mlKem);
+        Wallet remainder(sec, tokenSlug, "", 64, mlKem, source.ots_version);
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
         mol.sourceWallet = std::make_shared<Wallet>(source);
@@ -1015,7 +1017,7 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
         // token); the validator extracts the pubkey from the U-atom + issues a bundle-scoped JWT,
         // which is bound here (with `source` as the transport's decrypting wallet) on acceptance.
         auto proposeAuthorization = [&](const Wallet& source) -> std::unique_ptr<response::ResponseRequestAuthorization> {
-            Wallet remainder(sec, "USER", "", 64, mlKem);
+            Wallet remainder(sec, "USER", "", 64, mlKem, source.ots_version);
             Molecule mol(cell);
             mol.sourceWallet = std::make_shared<Wallet>(source);
             mol.remainderWallet = std::make_shared<Wallet>(remainder);

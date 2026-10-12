@@ -270,10 +270,16 @@ int main() {
         const auto expected = legacy.at("expectedMolecularHash").get<std::string>();
         check(molecule.molecularHash == expected, "the deserialized molecule carries the frozen hash",
               "got " + molecule.molecularHash);
+        std::string otsVerdict = "ok";
+        try {
+            Molecule::verifyOts(molecule);
+        } catch (const std::exception& e) {
+            otsVerdict = e.what();
+        }
         check(Molecule::verify(molecule), "Molecule::verify() passes (hash + isotope-V conservation + OTS)",
               "verifyMolecularHash=" + std::string(Molecule::verifyMolecularHash(molecule) ? "true" : "false") +
                   " verifyTokenIsotopeV=" + std::string(Molecule::verifyTokenIsotopeV(molecule) ? "true" : "false") +
-                  " verifyOts=" + std::string(Molecule::verifyOts(molecule) ? "true" : "false"));
+                  " verifyOts=" + otsVerdict);
     } catch (const std::exception& e) {
         check(false, "Molecule::verify() passes (hash + isotope-V conservation + OTS)",
               std::string("threw: ") + e.what());

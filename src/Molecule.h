@@ -53,10 +53,15 @@ public:
 	std::vector<Atom> initAuthorization(const Wallet &sourceWallet, bool encrypt = false);
 
 	// compressed mirrors JS Molecule.sign({ compressed = true }) and the C SDK's
-	// knishio_molecule_sign(..., bool compressed): the 2048-hex OTS is base64-compressed
-	// to 1368 characters before being chunked across the atoms. Every other SDK ships
-	// this form; do not pass false unless an uncompressed hex OTS is explicitly required.
+	// knishio_molecule_sign(..., bool compressed): the hex OTS (2048 for v1, 8192 for v2) is
+	// base64-compressed (1368 / 5464 characters) before being chunked across the atoms. Every
+	// other SDK ships this form; do not pass false unless an uncompressed hex OTS is explicitly
+	// required. The key is derived at signingOtsVersion(). Throws
+	// knishio::SignatureMalformedException when the molecular hash is not 64 characters of [0-9a-g].
 	std::string sign(const std::string &secret, bool anonymous = false, bool compressed = true);
+
+	// OTS version this molecule signs with: the source wallet's version, or 1 without one.
+	[[nodiscard]] int signingOtsVersion() const;
 
 	std::string toJson() const;
 
@@ -68,14 +73,18 @@ public:
 	static std::vector<int8_t> normalize(const std::vector<int8_t> &mappedHashArray);
 	static bool verify(const Molecule &molecule);
 	static bool verifyMolecularHash(const Molecule &molecule);
-	static bool verifyOts(const Molecule &molecule);
+	// Verifies the one-time signature (16 or 64 chains). Throws knishio::SignatureMalformedException
+	// for a malformed molecular hash or signature and knishio::SignatureMismatchException when the
+	// signature does not match atoms[0].walletAddress.
+	static void verifyOts(const Molecule &molecule);
 	static bool verifyTokenIsotopeV(const Molecule &molecule);
 	// JS CheckMolecule.continuId: a molecule signed by a USER wallet (atoms[0].token == "USER") must
 	// carry a ContinuID (I) atom. Part of check(), not verify(); the validator's Tier 1 enforces it too.
 	static bool verifyContinuId(const Molecule &molecule);
 	// Pre-submit check (contract 9.7) of a signed molecule: throws AtomsNotFoundException when the
-	// molecule has no atoms or lacks its ContinuID atom (JS AtomsMissingException), and
-	// std::runtime_error when hash, conservation or one-time signature do not verify.
+	// molecule has no atoms or lacks its ContinuID atom (JS AtomsMissingException),
+	// std::runtime_error when the hash or conservation do not verify, and verifyOts()'s
+	// SignatureMalformedException / SignatureMismatchException unchanged.
 	static void check(const Molecule &molecule);
 	// Conservation + meta-shape validation for B/F (buffer-family) molecules. Mirrors
 	// isotopeB()/isotopeF() in the JS reference; verifyTokenIsotopeV() delegates to this

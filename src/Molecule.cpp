@@ -12,6 +12,7 @@
 #include "exception/KnishIOException.h"
 #include "third_party/nlohmann/json.hpp"
 #include "kcore_bridge.h"
+#include "crypto_bigint.h"
 
 using namespace std::chrono;
 using std::map;
@@ -778,10 +779,15 @@ std::string Molecule::sign(const std::string &secret, bool anonymous, bool compr
 
 	this->molecularHash = Atom::hashAtomsBase17(this->atoms);
 
-	// Generate the private signing key for this molecule
-	auto key = Wallet::generateWalletKey(secret, this->atoms.front().token, this->atoms.front().position);
+	if (!knishio::WalletCrypto::isSignableHash(this->molecularHash))
+	{
+		throw knishio::SignatureMalformedException("Molecular hash is not signable");
+	}
 
-	// Subdivide Kk into 16 segments of 256 bytes (128 characters) each
+	// Generate the private signing key for this molecule at the source wallet's OTS version
+	auto key = Wallet::generateWalletKey(secret, this->atoms.front().token, this->atoms.front().position, this->signingOtsVersion());
+
+	// Subdivide the key into 128-character segments: 16 (v1) or 64 (v2)
 	auto keyChunks = chunkSubstr(key, 128);
 
 	// Convert Hm to numeric notation, and then normalize
@@ -838,6 +844,11 @@ std::string Molecule::sign(const std::string &secret, bool anonymous, bool compr
 	}
 
 	return lastPosition;
+}
+
+int Molecule::signingOtsVersion() const
+{
+	return this->sourceWallet ? this->sourceWallet->ots_version : 1;
 }
 
 std::string Molecule::toJson() const
@@ -1025,7 +1036,8 @@ bool Molecule::verify(const Molecule &molecule)
 	bool otsValid = false;
 
 	try {
-		otsValid = verifyOts(molecule);
+		verifyOts(molecule);
+		otsValid = true;
 	} catch (const std::exception&) {
 		otsValid = false;
 	}
@@ -1050,7 +1062,18 @@ void Molecule::check(const Molecule &molecule)
 	if (!verifyContinuId(molecule)) {
 		throw AtomsNotFoundException("Check::continuId() - Molecule is missing required ContinuID Atom!");
 	}
-	if (!verify(molecule)) {
+	if (!verifyMolecularHash(molecule)) {
+		throw std::runtime_error("Molecule validation failed");
+	}
+	// Throws SignatureMalformedException / SignatureMismatchException unchanged
+	verifyOts(molecule);
+	bool tokenValid = false;
+	try {
+		tokenValid = verifyTokenIsotopeV(molecule);
+	} catch (const std::exception&) {
+		tokenValid = false;
+	}
+	if (!tokenValid) {
 		throw std::runtime_error("Molecule validation failed");
 	}
 }
@@ -1073,19 +1096,52 @@ bool Molecule::verifyMolecularHash(const Molecule &molecule)
 	return false;
 }
 
+namespace {
+
+// Strict RFC 4648 base64 (standard alphabet, '=' padding only at the end, length a multiple of 4)
+bool isStrictBase64(const std::string &s)
+{
+	if (s.empty() || s.size() % 4 != 0) {
+		return false;
+	}
+	size_t padding = 0;
+	for (size_t i = 0; i < s.size(); i++) {
+		const auto c = static_cast<unsigned char>(s[i]);
+		if (c == '=') {
+			padding++;
+			continue;
+		}
+		if (padding > 0) {
+			return false;
+		}
+		if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/')) {
+			return false;
+		}
+	}
+	return padding <= 2;
+}
+
+} // namespace
+
 /**
    * Checks if the provided molecule was signed properly by transforming a collection of signature
    * fragments from its atoms and its molecular hash into a single-use wallet address to be matched
-   * against the sender�s address. If it matches, the molecule was correctly signed.
+   * against the sender's address. Accepts 16-chain (v1) and 64-chain (v2) signatures.
    *
    * @param {Molecule} molecule
-   * @returns {boolean}
+   * @throws {SignatureMalformedException} the molecular hash or the signature is not well-formed
+   * @throws {SignatureMismatchException} the signature does not match atoms[0].walletAddress
    */
-bool Molecule::verifyOts(const Molecule &molecule)
+void Molecule::verifyOts(const Molecule &molecule)
 {
-	if (molecule.atoms.empty() || molecule.molecularHash.empty())
+	if (molecule.atoms.empty())
 	{
-		return false;
+		throw AtomsNotFoundException();
+	}
+
+	if (!knishio::WalletCrypto::isSignableHash(molecule.molecularHash))
+	{
+		throw knishio::SignatureMalformedException();
 	}
 
 	// Convert Hm to numeric notation via EnumerateMolecule(Hm)
@@ -1099,22 +1155,22 @@ bool Molecule::verifyOts(const Molecule &molecule)
 		ots += atom.otsFragment;
 	}
 
-	// Wrong size? Maybe it's compressed. A 2048-char hex OTS is accepted as-is; anything else
-	// must base64-decode to exactly 2048 hex or the signature is malformed — the exact rule the
-	// JS reference (CheckMolecule.ots), the C SDK and the Rust validator apply. base64ToHex is
-	// lenient like Buffer.from(s, 'base64') (it skips characters outside the alphabet and never
-	// throws on content), so this length check is the only guard against a malformed signature.
-	if (ots.size() != 2048)
+	// A 2048- or 8192-char signature is hex as-is; anything else must strictly base64-decode
+	// to 2048 or 8192 hex.
+	if (ots.size() != 2048 && ots.size() != 8192)
 	{
-		ots = base64ToHex(ots);
-
-		if (ots.size() != 2048)
+		if (!isStrictBase64(ots))
 		{
-			return false;   // JS: SignatureMalformedException
+			throw knishio::SignatureMalformedException();
 		}
+		ots = base64ToHex(ots);
+	}
+	if (ots.size() != 2048 && ots.size() != 8192)
+	{
+		throw knishio::SignatureMalformedException();
 	}
 
-	// Subdivide Kk into 16 segments of 256 bytes (128 characters) each
+	// Subdivide the signature into 128-character segments: 16 (v1) or 64 (v2)
 	auto otsChunks = chunkSubstr(ots, 128);
 
 	std::string keyFragments;
@@ -1153,7 +1209,10 @@ bool Molecule::verifyOts(const Molecule &molecule)
 	// Honouring an address from atoms[0] meta would let a molecule claim one wallet's address
 	// while carrying another wallet's signature. The Rust validator (0.5.0+) rejects such a meta
 	// outright; the C, Python and Kotlin SDKs never honoured it.
-	return (address == molecule.atoms.front().walletAddress);
+	if (address != molecule.atoms.front().walletAddress)
+	{
+		throw knishio::SignatureMismatchException();
+	}
 }
 
 /**

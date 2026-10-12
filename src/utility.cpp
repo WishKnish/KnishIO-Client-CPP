@@ -35,7 +35,7 @@ std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom
 
 	// Validate hashHex contains only valid hex characters
 	for (char c : hashHex) {
-		if (!std::isxdigit(c)) {
+		if (!std::isxdigit(static_cast<unsigned char>(c))) {
 			throw std::invalid_argument("Input contains non-hex character: " + std::string(1, c));
 		}
 	}
@@ -108,7 +108,7 @@ std::vector<unsigned char> fromHexString(const std::string &str)
 		
 		// Validate hex characters
 		for (char c : hex_byte) {
-			if (!std::isxdigit(c)) {
+			if (!std::isxdigit(static_cast<unsigned char>(c))) {
 				throw std::invalid_argument("Invalid hex character: " + std::string(1, c));
 			}
 		}

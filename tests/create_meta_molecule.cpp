@@ -65,7 +65,12 @@ int main() {
     mol.sign(secret);
     check(!mol.molecularHash.empty(), "signed: molecular hash set");
     check(Molecule::verifyMolecularHash(mol), "verifyMolecularHash");
-    check(Molecule::verifyOts(mol), "verifyOts");
+    try {
+        Molecule::verifyOts(mol);
+        check(true, "verifyOts");
+    } catch (const std::exception& e) {
+        check(false, "verifyOts", std::string("threw: ") + e.what());
+    }
     check(Molecule::verifyContinuId(mol), "verifyContinuId");
 
     if (failures == 0) {

@@ -53,6 +53,24 @@ public:
 };
 
 /**
+ * Thrown when a molecule's OTS signature or molecular hash is not well-formed
+ */
+class SignatureMalformedException : public MoleculeException {
+public:
+    explicit SignatureMalformedException(const std::string& message = "OTS malformed")
+        : MoleculeException(message) {}
+};
+
+/**
+ * Thrown when a molecule's OTS signature does not match the signing wallet address
+ */
+class SignatureMismatchException : public MoleculeException {
+public:
+    explicit SignatureMismatchException(const std::string& message = "OTS mismatch")
+        : MoleculeException(message) {}
+};
+
+/**
  * Exception thrown when authentication fails
  */
 class AuthenticationException : public KnishIOException {
