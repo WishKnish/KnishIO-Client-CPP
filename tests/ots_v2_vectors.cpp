@@ -13,6 +13,7 @@
  *     ../shared-test-results/ots-v2-vectors.json. A standalone checkout has no such file; the
  *     test then prints SKIP and exits 77, which CTest reports as skipped.
  */
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -139,6 +140,46 @@ int runRoundTrip() {
               "an unsupported OTS version is refused", e.what());
     }
 
+    return failures == 0 ? 0 : 1;
+}
+
+// The WOTS+ address computed the long way: each 128-hex chunk hashed 16 times, then
+// SHAKE256 to 8192 bits and SHAKE256 to 256 bits. Independent of the build's kcore option.
+std::string referenceAddress(const std::string& key) {
+    std::string digest;
+    for (size_t at = 0; at < key.size(); at += 128) {
+        std::string chunk = key.substr(at, 128);
+        for (int i = 0; i < 16; i++) {
+            chunk = shake256Hex(chunk, 512);
+        }
+        digest += chunk;
+    }
+    return shake256Hex(shake256Hex(digest, 8192), 256);
+}
+
+// Wallet::generateWalletAddress equals the reference address for v1 and v2 keys, including
+// keys the address entry point does not take as-is (uppercase hex).
+int runAddress() {
+    std::cout << "WOTS+ address equals the reference for v1 and v2 keys" << std::endl;
+    std::string secret;
+    for (int i = 0; i < 128; i++) {
+        secret += "0123456789abcdef";
+    }
+    for (int n = 0; n < 20; n++) {
+        std::string position(64, '0');
+        const std::string suffix = std::to_string(n);
+        position.replace(64 - suffix.size(), suffix.size(), suffix);
+        for (int version = 1; version <= 2; version++) {
+            const std::string key = Wallet::generateWalletKey(secret, "USER", position, version);
+            const std::string name = "v" + std::to_string(version) + " position " + suffix;
+            check(Wallet::generateWalletAddress(key) == referenceAddress(key), name + ": address");
+        }
+    }
+    std::string upper = Wallet::generateWalletKey(secret, "USER", std::string(64, 'f'), 2);
+    for (auto& c : upper) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    check(Wallet::generateWalletAddress(upper) == referenceAddress(upper), "v2 uppercase key: address");
     return failures == 0 ? 0 : 1;
 }
 
@@ -559,6 +600,8 @@ int main(int argc, char** argv) {
         rc = runVectors();
     } else if (mode == "client") {
         rc = runClient();
+    } else if (mode == "address") {
+        rc = runAddress();
     } else {
         rc = runRoundTrip();
     }

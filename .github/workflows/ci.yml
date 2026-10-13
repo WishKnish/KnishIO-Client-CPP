@@ -98,7 +98,7 @@ jobs:
 
   # The same build with the KnishIO Crypto Core linked (KNISHIO_USE_KCORE=ON), so the kcore path
   # the prebuilt release packages ship is proven on every push, not only at release. The kcore
-  # package is the pinned 0.1.0 release asset, checked by sha256 before it is extracted.
+  # package is the pinned 0.2.0 release asset, checked by sha256 before it is extracted.
   gate-kcore:
     name: build + self-test (kcore)
     needs: version
@@ -121,13 +121,13 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 22
 
-      - name: Fetch kcore 0.1.0 (linux-x64-gnu, sha256-pinned)
+      - name: Fetch kcore 0.2.0 (linux-x64-gnu, sha256-pinned)
         run: |
           set -euo pipefail
-          PKG=knishio-crypto-core-0.1.0-linux-x64-gnu
+          PKG=knishio-crypto-core-0.2.0-linux-x64-gnu
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/$PKG.tar.gz" \
-            "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.1.0/$PKG.tar.gz"
-          echo "57a3187c136cccbd64ed7dc7561745f9edba2697f42f9f5b47c4f66f1d0823b0  $RUNNER_TEMP/$PKG.tar.gz" | sha256sum -c -
+            "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.0/$PKG.tar.gz"
+          echo "137a7adb73df0a1fe84656cf02d8e6513a6dec0a548ed9adc7c220dac71e4b05  $RUNNER_TEMP/$PKG.tar.gz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/kcore"
           tar -xzf "$RUNNER_TEMP/$PKG.tar.gz" -C "$RUNNER_TEMP/kcore" --strip-components=1
 
@@ -139,7 +139,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/kcore" \
             -DKNISHIO_BUILD_TESTS=ON \
             -DKNISHIO_BUILD_EXAMPLES=OFF | tee "$RUNNER_TEMP/configure-kcore.log"
-          grep -F 'kcore: KnishIOCryptoCore 0.1.0' "$RUNNER_TEMP/configure-kcore.log"
+          grep -F 'kcore: KnishIOCryptoCore 0.2.0' "$RUNNER_TEMP/configure-kcore.log"
 
       - name: Build
         run: cmake --build build-kcore -j"$(nproc)"

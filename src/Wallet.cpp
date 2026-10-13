@@ -221,19 +221,14 @@ std::string Wallet::generateWalletAddress(const std::string &key)
 	std::string digestSponge;
 
 #ifdef KNISHIO_HAVE_KCORE
-	if (key.size() == 2048)
 	{
 		std::string viaKcore;
-		if (kcore_bridge::wotsAddress(key, viaKcore))
+		if ((key.size() == 2048 && kcore_bridge::wotsAddress(key, viaKcore)) ||
+		    (key.size() == 8192 && kcore_bridge::wotsAddressV2(key, viaKcore)))
 		{
 			return viaKcore;
 		}
 	}
-	else if (key.size() == 8192 && !kcore_bridge::chainsHex(keyFragments, std::vector<int>(keyFragments.size(), 16), digestSponge))
-	{
-		digestSponge.clear();
-	}
-	if (digestSponge.empty())
 #endif
 	for (auto &workingFragment : keyFragments)
 	{

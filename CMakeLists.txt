@@ -237,7 +237,7 @@ endif()
 # so the installed package config finds kcore again (KNISHIO_CONFIG_DEPS).
 set(KNISHIO_CONFIG_DEPS "")
 if(KNISHIO_USE_KCORE)
-    find_package(KnishIOCryptoCore 0.1.0 CONFIG REQUIRED)
+    find_package(KnishIOCryptoCore 0.2.0 CONFIG REQUIRED)
     foreach(_knishio_lib knishio-client-cpp knishio-client-cpp-static)
         target_link_libraries(${_knishio_lib} PRIVATE KnishIO::kcore-static)
         target_compile_definitions(${_knishio_lib} PRIVATE KNISHIO_HAVE_KCORE=1)

@@ -241,6 +241,16 @@ set_tests_properties(OtsV2Client PROPERTIES
     TIMEOUT 120
     REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
 )
+add_test(
+    NAME OtsV2AddressEquivalence
+    COMMAND ots_v2_vectors address
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(OtsV2AddressEquivalence PROPERTIES
+    LABELS "crypto;ots;unit"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
+)
 
 # The OTS check compares the recovered address with atoms[0].walletAddress only. The shared
 # cross-SDK forgery fixture (built by JS 1.2.1) carries a molecule that claims a victim's

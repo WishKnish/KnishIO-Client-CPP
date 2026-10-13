@@ -43,6 +43,9 @@ substantiate a detail, the entry says so instead of guessing.
 
 ### Changed
 
+- With `KNISHIO_USE_KCORE=ON`, OTS v2 wallet addresses are computed by kcore
+  (`kcore_wots_address_v2`); the option now requires `KnishIOCryptoCore` 0.2.0. Test
+  `OtsV2AddressEquivalence` checks v1 and v2 addresses against the reference computation.
 - `Molecule::verifyOts` returns `void` and verifies v1 and v2 signatures (2048 or 8192 hex, or
   their strict base64 form). It throws `SignatureMalformedException` for a molecular hash that
   is not 64 characters of `[0-9a-g]` or a malformed signature, and `SignatureMismatchException`

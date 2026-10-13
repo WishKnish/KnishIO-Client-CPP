@@ -127,21 +127,21 @@ jobs:
 
       # The prebuilt packages are built with kcore (KNISHIO_USE_KCORE=ON) and bundle it, so a
       # consumer's find_package(KnishIOClientCPP) resolves kcore from the same prefix. The kcore
-      # package is the pinned 0.1.0 release asset, checked by sha256 before extraction. Source
+      # package is the pinned 0.2.0 release asset, checked by sha256 before extraction. Source
       # builds (the `source` job below) keep the default, KNISHIO_USE_KCORE=OFF.
-      - name: Fetch kcore 0.1.0 (sha256-pinned)
+      - name: Fetch kcore 0.2.0 (sha256-pinned)
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           case "$PLATFORM" in
-            linux-x86_64) TARGET=linux-x64-gnu;    SHA=57a3187c136cccbd64ed7dc7561745f9edba2697f42f9f5b47c4f66f1d0823b0 ;;
-            macos-arm64)  TARGET=darwin-universal; SHA=e75e4a9f24472f9602e41984b5f0b5c6d387284b6ca8bb1b116481b96fd7b950 ;;
+            linux-x86_64) TARGET=linux-x64-gnu;    SHA=137a7adb73df0a1fe84656cf02d8e6513a6dec0a548ed9adc7c220dac71e4b05 ;;
+            macos-arm64)  TARGET=darwin-universal; SHA=a482d979d48c1dfb8ce3d8528795e217a3e304f8c5eeed363097067d67746329 ;;
             *) echo "::error::no kcore package mapped for $PLATFORM"; exit 1 ;;
           esac
-          PKG="knishio-crypto-core-0.1.0-$TARGET"
+          PKG="knishio-crypto-core-0.2.0-$TARGET"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/$PKG.tar.gz" \
-            "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.1.0/$PKG.tar.gz"
+            "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.0/$PKG.tar.gz"
           echo "$SHA  $RUNNER_TEMP/$PKG.tar.gz" | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/kcore"
           tar -xzf "$RUNNER_TEMP/$PKG.tar.gz" -C "$RUNNER_TEMP/kcore" --strip-components=1

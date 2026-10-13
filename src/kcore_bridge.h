@@ -41,6 +41,20 @@ inline bool wotsAddress(const std::string &key, std::string &address)
 	return true;
 }
 
+// WOTS+ address of an 8192-hex (64-chain) key. False when the key is ineligible or kcore fails.
+inline bool wotsAddressV2(const std::string &key, std::string &address)
+{
+	if (!isLowerHex(key, 8192)) {
+		return false;
+	}
+	char out[64];
+	if (kcore_wots_address_v2(key.c_str(), out) != 0) {
+		return false;
+	}
+	address.assign(out, 64);
+	return true;
+}
+
 // Advances each 128-hex chunk counts[i] times and returns the concatenation. Requires 1..64
 // chunks of exactly 128 lowercase hex characters and every count in 0..64.
 inline bool chainsHex(const std::vector<std::string> &chunks, const std::vector<int> &counts, std::string &out)
