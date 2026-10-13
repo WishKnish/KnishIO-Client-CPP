@@ -207,6 +207,19 @@ set_tests_properties(OtsV2Vectors PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
 )
 
+# Client-level OTS version: the client option, version detection for the client's own ledger
+# wallets, and the wallets the client signs from, driven against the loopback stub validator.
+add_test(
+    NAME OtsV2Client
+    COMMAND ots_v2_vectors client
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(OtsV2Client PROPERTIES
+    LABELS "crypto;signature;ots;unit"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
+)
+
 # The OTS check compares the recovered address with atoms[0].walletAddress only. The shared
 # cross-SDK forgery fixture (built by JS 1.2.1) carries a molecule that claims a victim's
 # address, is signed by another wallet, and names that signer in a `signingWallet` meta: it must

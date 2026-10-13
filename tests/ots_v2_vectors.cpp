@@ -3,9 +3,12 @@
  * @brief OTS v2 (64-chain WOTS+): key derivation, address, normalized hash, ML-KEM identities
  *        of v2 wallets, molecule verdicts and malformed declared hashes.
  *
- * Two modes, registered as two CTest entries:
+ * Three modes, registered as three CTest entries:
  *   - `roundtrip` (OtsV2RoundTrip): always runs. A v2 source wallet signs a molecule, the
  *     5464-char signature verifies, and one flipped character gives SignatureMismatchException.
+ *   - `client` (OtsV2Client): always runs. Client-level OTS version: the Builder option, version
+ *     detection, Wallet::setOtsVersion, and the wallets a client signs from, against the loopback
+ *     stub validator (tests/loopback_validator.h).
  *   - `vectors` (OtsV2Vectors): the shared OTS v2 vectors, read from KNISHIO_OTS_V2_VECTORS or
  *     ../shared-test-results/ots-v2-vectors.json. A standalone checkout has no such file; the
  *     test then prints SKIP and exits 77, which CTest reports as skipped.
@@ -14,19 +17,34 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "KnishIOClient.h"
 #include "Molecule.h"
 #include "Wallet.h"
 #include "utility.h"
 #include "exception/KnishIOException.h"
+#include "loopback_validator.h"
 #include "third_party/nlohmann/json.hpp"
 
 using json = nlohmann::json;
 using KnishIO::Molecule;
 using KnishIO::Wallet;
+
+namespace knishio {
+// Declared a friend of KnishIOClient: reaches the private ledger-wallet binding helper.
+class KnishIOClientTestAccess {
+public:
+    static int bind(const KnishIOClient& client, const std::string& token, const std::string& position,
+                    const std::string& address) {
+        return client.bindOwnWalletOtsVersion(token, position, address);
+    }
+};
+}  // namespace knishio
 
 namespace {
 
@@ -119,6 +137,222 @@ int runRoundTrip() {
     } catch (const std::invalid_argument& e) {
         check(std::string(e.what()) == "KnishIO: unsupported OTS version 3; expected 1 or 2.",
               "an unsupported OTS version is refused", e.what());
+    }
+
+    return failures == 0 ? 0 : 1;
+}
+
+bool endsWith(const std::string& text, const std::string& suffix) {
+    return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string joinedSignature(const json& proposal) {
+    std::string joined;
+    for (const auto& atom : proposal["variables"]["molecule"]["atoms"]) {
+        if (atom.contains("otsFragment") && atom["otsFragment"].is_string()) {
+            joined += atom["otsFragment"].get<std::string>();
+        }
+    }
+    return joined;
+}
+
+std::string atomString(const json& atom, const std::string& field) {
+    return atom.contains(field) && atom[field].is_string() ? atom[field].get<std::string>() : std::string();
+}
+
+std::string metaString(const json& atom, const std::string& key) {
+    if (atom.contains("meta") && atom["meta"].is_array()) {
+        for (const auto& kv : atom["meta"]) {
+            if (kv.value("key", "") == key && kv["value"].is_string()) {
+                return kv["value"].get<std::string>();
+            }
+        }
+    }
+    return {};
+}
+
+// The OTS version whose derivation (secret, token, position) gives `address`; 0 for neither.
+int versionOf(const std::string& secret, const std::string& token, const std::string& position,
+              const std::string& address) {
+    return Wallet::detectOtsVersion(secret, token, position, address).value_or(0);
+}
+
+// The OTS version of the wallet that signed a proposal: atoms[0]'s address derivation, and the
+// signature size that version gives (1368 base64 characters for v1, 5464 for v2).
+int signerVersion(const std::string& secret, const json& proposal) {
+    const json& first = proposal["variables"]["molecule"]["atoms"][0];
+    const int version = versionOf(secret, atomString(first, "token"), atomString(first, "position"),
+                                  atomString(first, "walletAddress"));
+    const size_t size = joinedSignature(proposal).size();
+    if ((version == 1 && size != 1368) || (version == 2 && size != 5464)) {
+        return -1;
+    }
+    return version;
+}
+
+std::unique_ptr<knishio::KnishIOClient> clientAt(const std::string& uri, int otsVersion) {
+    return knishio::KnishIOClient::Builder().uris({uri}).cellSlug("public").maxRetries(0)
+        .timeout(std::chrono::milliseconds(10000)).otsVersion(otsVersion).build();
+}
+
+json continuIdAt(const std::string& bundle, const std::string& position, const std::string& address) {
+    return {{"position", position}, {"address", address}, {"tokenSlug", "USER"},
+            {"bundleHash", bundle}, {"pubkey", nullptr}, {"characters", "BASE64"}};
+}
+
+int runClient() {
+    std::string secret;
+    for (int i = 0; i < 128; i++) {
+        secret += "0123456789abcdef";
+    }
+    const std::string position(64, 'b');
+    const std::string addressV1 = Wallet::generateWalletAddress(Wallet::generateWalletKey(secret, "USER", position, 1));
+    const std::string addressV2 = Wallet::generateWalletAddress(Wallet::generateWalletKey(secret, "USER", position, 2));
+    const std::string unrelated(64, 'c');
+    const std::string bundle = Wallet::generateBundleHash(secret);
+    const std::string notDerived = "KnishIO: wallet " + unrelated + " is not derived from this secret at position "
+        + position + " under OTS version 1 or 2.";
+
+    std::cout << "Wallet::detectOtsVersion and Wallet::setOtsVersion" << std::endl;
+    for (const int preferred : {1, 2}) {
+        const std::string order = " (preferred " + std::to_string(preferred) + ")";
+        check(Wallet::detectOtsVersion(secret, "USER", position, addressV1, preferred) == std::optional<int>(1),
+              "a v1 address detects as 1" + order);
+        check(Wallet::detectOtsVersion(secret, "USER", position, addressV2, preferred) == std::optional<int>(2),
+              "a v2 address detects as 2" + order);
+        check(!Wallet::detectOtsVersion(secret, "USER", position, unrelated, preferred).has_value(),
+              "an unrelated address detects as none" + order);
+    }
+    std::string upperV2 = addressV2;
+    for (auto& c : upperV2) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    check(Wallet::detectOtsVersion(secret, "USER", position, upperV2, 1) == std::optional<int>(2),
+          "detection compares addresses case-insensitively");
+
+    try {
+        Wallet keyless(secret, "USER", position);
+        keyless.key.clear();
+        keyless.address = addressV2;
+        check(keyless.setOtsVersion(2).ots_version == 2, "setOtsVersion sets a wallet that holds no key");
+    } catch (const std::exception& e) {
+        check(false, "setOtsVersion sets a wallet that holds no key", std::string("threw: ") + e.what());
+    }
+    Wallet keyed(secret, "USER", position);
+    try {
+        keyed.setOtsVersion(2);
+        check(false, "setOtsVersion refuses to change a keyed wallet", "changed it");
+    } catch (const std::logic_error& e) {
+        check(std::string(e.what()) == "KnishIO: cannot change the OTS version of a keyed wallet.",
+              "setOtsVersion refuses to change a keyed wallet", e.what());
+    }
+    check(keyed.setOtsVersion(1).ots_version == 1, "setOtsVersion keeps a keyed wallet's own version");
+
+    std::cout << "\nKnishIOClient OTS version option" << std::endl;
+    try {
+        (void)knishio::KnishIOClient::Builder().otsVersion(3);
+        check(false, "Builder::otsVersion refuses 3", "accepted it");
+    } catch (const std::invalid_argument& e) {
+        check(std::string(e.what()) == "KnishIO: unsupported OTS version 3; expected 1 or 2.",
+              "Builder::otsVersion refuses 3", e.what());
+    }
+    try {
+        knishio::KnishIOClient::Config config;
+        config.uris = {"http://127.0.0.1:9/graphql"};
+        config.otsVersion = 0;
+        knishio::KnishIOClient client(config);
+        check(false, "a Config with otsVersion 0 is refused", "constructed a client");
+    } catch (const std::invalid_argument& e) {
+        check(std::string(e.what()) == "KnishIO: unsupported OTS version 0; expected 1 or 2.",
+              "a Config with otsVersion 0 is refused", e.what());
+    }
+    check(knishio::KnishIOClient::Builder().uris({"http://127.0.0.1:9/graphql"}).build()->getOtsVersion() == 1,
+          "the client OTS version defaults to 1");
+
+    try {
+        std::cout << "\nA client at OTS version 2 creates v2 keys" << std::endl;
+        knishio_test::StubValidator stub;
+        auto client = clientAt(stub.uri(), 2);
+        check(client->getOtsVersion() == 2, "getOtsVersion() returns the option");
+        (void)client->requestAuthToken(secret).get();   // no ContinuID: fresh AUTH wallet
+        (void)client->createMeta("OtsV2", "client", {{"k", "v"}}).get();   // no ContinuID: fresh USER source
+        (void)client->createWallet("OTSV2").get();
+        const auto proposals = stub.requests("ProposeMolecule");
+        check(proposals.size() == 3, "three molecules proposed", "got " + std::to_string(proposals.size()));
+        if (proposals.size() == 3) {
+            const json& auth = proposals[0]["variables"]["molecule"]["atoms"][0];
+            check(atomString(auth, "token") == "AUTH" && signerVersion(secret, proposals[0]) == 2,
+                  "the AUTH login wallet is v2");
+            check(signerVersion(secret, proposals[1]) == 2, "the source wallet without a ContinuID is v2");
+            check(signerVersion(secret, proposals[2]) == 2, "createWallet signs from a v2 source");
+            bool newWalletV2 = false;
+            for (const auto& atom : proposals[2]["variables"]["molecule"]["atoms"]) {
+                if (atomString(atom, "isotope") == "C") {
+                    newWalletV2 = versionOf(secret, "OTSV2", metaString(atom, "walletPosition"),
+                                            metaString(atom, "walletAddress")) == 2;
+                }
+            }
+            check(newWalletV2, "createWallet defines a v2 wallet");
+        }
+    } catch (const std::exception& e) {
+        check(false, "client at version 2", std::string("threw: ") + e.what());
+    }
+
+    try {
+        std::cout << "\nA client at OTS version 1 signs from a v2 ledger wallet" << std::endl;
+        knishio_test::StubValidator stub;
+        stub.setContinuId(continuIdAt(bundle, position, addressV2));
+        auto client = clientAt(stub.uri(), 1);
+        (void)client->requestAuthToken(secret).get();   // the ContinuID pointer is a v2 USER wallet
+        check(knishio::KnishIOClientTestAccess::bind(*client, "USER", position, addressV2) == 2,
+              "binding a v2 ledger wallet gives 2");
+        check(knishio::KnishIOClientTestAccess::bind(*client, "USER", position, addressV1) == 1,
+              "binding a v1 ledger wallet gives 1");
+        check(knishio::KnishIOClientTestAccess::bind(*client, "USER", position, "") == 1,
+              "a wallet without an address takes the client version");
+        (void)client->createMeta("OtsV2", "detect", {{"k", "v"}}).get();
+        const auto proposals = stub.requests("ProposeMolecule");
+        check(proposals.size() == 2, "two molecules proposed", "got " + std::to_string(proposals.size()));
+        if (proposals.size() == 2) {
+            const json& login = proposals[0]["variables"]["molecule"]["atoms"][0];
+            check(atomString(login, "token") == "USER" && atomString(login, "walletAddress") == addressV2
+                      && signerVersion(secret, proposals[0]) == 2,
+                  "the login signs from the v2 ContinuID pointer");
+            const json& meta = proposals[1]["variables"]["molecule"]["atoms"][0];
+            check(atomString(meta, "walletAddress") == addressV2 && signerVersion(secret, proposals[1]) == 2,
+                  "the source wallet at a v2 ContinuID head is v2");
+        }
+    } catch (const std::exception& e) {
+        check(false, "client at version 1 with a v2 ledger wallet", std::string("threw: ") + e.what());
+    }
+
+    try {
+        std::cout << "\nA ledger wallet neither version derives" << std::endl;
+        knishio_test::StubValidator stub;
+        stub.setContinuId(continuIdAt(bundle, position, unrelated));
+        auto client = clientAt(stub.uri(), 1);
+        (void)client->requestAuthToken(secret).get();   // the pointer falls back to an AUTH wallet
+        try {
+            (void)knishio::KnishIOClientTestAccess::bind(*client, "USER", position, unrelated);
+            check(false, "binding it throws WalletException", "returned a version");
+        } catch (const knishio::WalletException& e) {
+            check(endsWith(e.what(), notDerived), "binding it throws WalletException", e.what());
+        }
+        try {
+            (void)client->createMeta("OtsV2", "refused", {{"k", "v"}}).get();
+            check(false, "createMeta refuses a ContinuID head it cannot derive", "proposed a molecule");
+        } catch (const knishio::WalletException& e) {
+            check(endsWith(e.what(), notDerived), "createMeta refuses a ContinuID head it cannot derive", e.what());
+        }
+        const auto proposals = stub.requests("ProposeMolecule");
+        check(proposals.size() == 1, "only the login was proposed", "got " + std::to_string(proposals.size()));
+        if (!proposals.empty()) {
+            const json& login = proposals[0]["variables"]["molecule"]["atoms"][0];
+            check(atomString(login, "token") == "AUTH" && signerVersion(secret, proposals[0]) == 1,
+                  "the login falls back to a v1 AUTH wallet");
+        }
+    } catch (const std::exception& e) {
+        check(false, "underivable ledger wallet", std::string("threw: ") + e.what());
     }
 
     return failures == 0 ? 0 : 1;
@@ -255,6 +489,8 @@ int main(int argc, char** argv) {
     int rc = 0;
     if (mode == "vectors") {
         rc = runVectors();
+    } else if (mode == "client") {
+        rc = runClient();
     } else {
         rc = runRoundTrip();
     }

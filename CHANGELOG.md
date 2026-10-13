@@ -31,6 +31,15 @@ substantiate a detail, the entry says so instead of guessing.
 - `knishio::WalletCrypto::isSignableHash(hash)`: true for exactly 64 characters of `[0-9a-g]`.
 - `tests/ots_v2_vectors.cpp`, registered as `OtsV2RoundTrip` (always runs) and `OtsV2Vectors`
   (the shared OTS v2 vectors; skipped with exit code 77 in a standalone checkout).
+- **Client-level OTS version.** `KnishIOClient::Config::otsVersion` and
+  `KnishIOClient::Builder::otsVersion(int)` (1 default, or 2; any other value throws
+  `std::invalid_argument`), and `KnishIOClient::getOtsVersion()`. Keys the client creates from
+  its secret (the first source wallet, the AUTH wallet, `createWallet`, token, credited and
+  claim wallets) use it. Registered as the always-running `OtsV2Client` test.
+- `Wallet::detectOtsVersion(secret, token, position, address, preferred)`: the OTS version
+  whose derived address equals `address`, or `std::nullopt`. `Wallet::setOtsVersion()` for a
+  wallet that holds no key; changing a keyed wallet's version throws `std::logic_error`
+  (`KnishIO: cannot change the OTS version of a keyed wallet.`).
 
 ### Changed
 
@@ -48,6 +57,12 @@ substantiate a detail, the entry says so instead of guessing.
   position still throws `std::invalid_argument`.
 - Remainder, buffer and burn wallets that `KnishIOClient` builds alongside a source wallet use
   the source wallet's OTS version.
+- Wallets the ledger returns for this client (the ContinuID head the USER-signed operations
+  sign from and the login pointer, and the balance wallets transfers, burns, buffer deposits
+  and withdrawals, replenishment and fusion use) are used at the OTS version their address was
+  derived at. Those operations throw `WalletException` (`KnishIO: wallet <address> is not
+  derived from this secret at position <position> under OTS version 1 or 2.`) when neither
+  version derives the address; the login pointer falls back to an AUTH wallet as before.
 - Hex and character-class checks cast to `unsigned char` before calling `std::isxdigit`.
 
 ## [1.3.1] — 2026-10-09

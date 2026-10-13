@@ -71,6 +71,7 @@ public:
         int maxRetries = 3;                              ///< Maximum retry attempts
         std::chrono::milliseconds retryDelay{1000};      ///< Delay between retries
         int mlKemParameterSet = 1024;                     ///< ML-KEM parameter set (1024 default, 768 step-back)
+        int otsVersion = 1;                               ///< OTS version of the keys the client creates from its secret (1 default, or 2)
     };
 
     /**
@@ -100,6 +101,9 @@ public:
         Builder& maxRetries(int retries);
         Builder& retryDelay(std::chrono::milliseconds delay);
         Builder& mlKemParameterSet(int parameterSet = 1024);
+        // OTS version of the keys the client creates from its secret: 1 (default) or 2. Throws
+        // std::invalid_argument for any other value.
+        Builder& otsVersion(int version = 1);
         
         [[nodiscard]] std::unique_ptr<KnishIOClient> build() const;
         
@@ -126,6 +130,12 @@ public:
      * @param cellSlug The cell identifier
      */
     void setCellSlug(const std::string& cellSlug);
+
+    /**
+     * OTS version of the keys this client creates from its secret (1 default, or 2). Wallets the
+     * ledger returns keep the version their address was derived at.
+     */
+    [[nodiscard]] int getOtsVersion() const noexcept;
     
     /**
      * Get the current cell slug
@@ -450,7 +460,17 @@ private:
     // (contract 9.7: every molecule a client operation builds); proposeMolecule, the raw path for a
     // caller-built molecule, passes false.
     [[nodiscard]] std::unique_ptr<response::ResponseProposeMolecule> submitMolecule(KnishIO::Molecule& mol, bool checkBeforeSend = true);
-    [[nodiscard]] std::string resolveContinuIdPosition(const std::string& bundle);
+    // The USER wallet at the bundle's live ContinuID head, at the OTS version its ledger address was
+    // derived at; a fresh USER wallet at the client's version when the bundle has no ContinuID.
+    // Throws WalletException when neither version derives the head's address from the secret.
+    [[nodiscard]] KnishIO::Wallet continuIdSourceWallet(const std::string& bundle, int mlKemParameterSet);
+
+    // The OTS version of one of this client's own ledger wallets (token, position, address): the
+    // version whose derived address equals `address`, trying the client's version first; the
+    // client's version when position or address is empty. Throws WalletException when neither
+    // version derives the address from the client secret.
+    [[nodiscard]] int bindOwnWalletOtsVersion(const std::string& token, const std::string& position,
+                                              const std::string& address) const;
 
     // Live-wiring helper (slice 5b): a bundle's on-ledger token wallet (from the Balance query) —
     // the spendable source for a value transfer. The position/balance MUST come from the validator

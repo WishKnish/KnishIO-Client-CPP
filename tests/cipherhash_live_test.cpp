@@ -32,11 +32,14 @@ int main() {
 
         const char* param_env = std::getenv("CIPHERHASH_MLKEM_PARAMETER_SET");
         int param = (param_env && std::string(param_env) == "768") ? 768 : 1024;
+        const char* ots_env = std::getenv("CIPHERHASH_OTS_VERSION");
+        const int otsVersion = (ots_env && std::string(ots_env) == "2") ? 2 : 1;
 
         auto client = knishio::KnishIOClient::Builder()
             .uris({url})
             .timeout(std::chrono::milliseconds(15000))
             .mlKemParameterSet(param)
+            .otsVersion(otsVersion)
             .build();
 
         // ONE session, transport toggled on it — the queried balance wallet stays fixed. (A fresh
@@ -106,6 +109,7 @@ int main() {
             .uris({url})
             .timeout(std::chrono::milliseconds(15000))
             .mlKemParameterSet(param)
+            .otsVersion(otsVersion)
             .build();
         auto auth = client2->requestAuthToken(secret2, std::optional<std::string>("public"), true).get();
         if (!auth || auth->getAuthToken().empty()) {

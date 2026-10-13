@@ -112,6 +112,11 @@ KnishIOClient::Builder& KnishIOClient::Builder::mlKemParameterSet(int parameterS
     return *this;
 }
 
+KnishIOClient::Builder& KnishIOClient::Builder::otsVersion(int version) {
+    config_.otsVersion = Wallet::checkedOtsVersion(version);
+    return *this;
+}
+
 std::unique_ptr<KnishIOClient> KnishIOClient::Builder::build() const {
     if (config_.uris.empty()) {
         throw KnishIOException("At least one URI must be provided");
@@ -150,6 +155,10 @@ std::optional<std::string> KnishIOClient::getCellSlug() const noexcept {
     return pImpl_->config.cellSlug;
 }
 
+int KnishIOClient::getOtsVersion() const noexcept {
+    return pImpl_->config.otsVersion;
+}
+
 void KnishIOClient::setSecret(const std::string& secret) {
     if (secret.empty()) {
         throw KnishIOException("Secret cannot be empty");
@@ -164,7 +173,7 @@ void KnishIOClient::setSecret(const std::string& secret) {
     pImpl_->secret = secret;
     
     // Generate wallet from secret
-    pImpl_->authWallet = std::make_unique<Wallet>(secret, "USER", "", 64, pImpl_->config.mlKemParameterSet);
+    pImpl_->authWallet = std::make_unique<Wallet>(secret, "USER", "", 64, pImpl_->config.mlKemParameterSet, pImpl_->config.otsVersion);
     pImpl_->bundle = Wallet::generateBundleHash(secret);
     
     log("DEBUG", "Secret set and wallet initialized");
@@ -375,10 +384,11 @@ KnishIOClient::submitMolecule(KnishIO::Molecule& mol, bool checkBeforeSend) {
     return result;
 }
 
-// Resolve a bundle's live on-ledger ContinuID position (the chain head a non-U molecule must sign
-// at). Queries the PUBLIC ContinuId(bundle, "USER"); returns the 64-char position, or "" for a
-// genesis bundle (no ContinuID yet -> the caller falls back to a fresh random position).
-std::string KnishIOClient::resolveContinuIdPosition(const std::string& bundle) {
+// The USER wallet at a bundle's live on-ledger ContinuID head (the chain head a non-U molecule must
+// sign at), keyed at the OTS version its ledger address was derived at. Queries the PUBLIC
+// ContinuId(bundle, "USER"); a genesis bundle (no ContinuID yet) gets a fresh USER wallet at a
+// random position and the client's OTS version.
+KnishIO::Wallet KnishIOClient::continuIdSourceWallet(const std::string& bundle, int mlKemParameterSet) {
     static const std::string CONTINUID_QUERY =
         "query ContinuId($bundle: String, $token: String) {"
         " ContinuId(bundle: $bundle, token: $token) {"
@@ -386,6 +396,8 @@ std::string KnishIOClient::resolveContinuIdPosition(const std::string& bundle) {
     nlohmann::json variables;
     variables["bundle"] = bundle;
     variables["token"] = "USER";
+    std::string position;
+    std::string address;
     try {
         auto httpResp = pImpl_->httpClient->query(CONTINUID_QUERY, variables).get();
         if (httpResp.isSuccess()) {
@@ -393,10 +405,11 @@ std::string KnishIOClient::resolveContinuIdPosition(const std::string& bundle) {
             if (body.contains("data") && body["data"].contains("ContinuId")
                 && body["data"]["ContinuId"].is_object()) {
                 const auto& cid = body["data"]["ContinuId"];
-                if (cid.contains("position") && cid["position"].is_string()) {
-                    std::string pos = cid["position"].get<std::string>();
-                    if (pos.size() == 64) {
-                        return pos;
+                if (cid.contains("position") && cid["position"].is_string()
+                    && cid["position"].get<std::string>().size() == 64) {
+                    position = cid["position"].get<std::string>();
+                    if (cid.contains("address") && cid["address"].is_string()) {
+                        address = cid["address"].get<std::string>();
                     }
                 }
             }
@@ -404,7 +417,29 @@ std::string KnishIOClient::resolveContinuIdPosition(const std::string& bundle) {
     } catch (const std::exception&) {
         // fall through to genesis (empty position)
     }
-    return {};
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — callers run ensureAuthenticated() after setSecret
+    const std::string sec = pImpl_->secret.value();
+    if (position.empty()) {
+        return Wallet(sec, "USER", "", 64, mlKemParameterSet, pImpl_->config.otsVersion);
+    }
+    return Wallet(sec, "USER", position, 64, mlKemParameterSet, bindOwnWalletOtsVersion("USER", position, address));
+}
+
+int KnishIOClient::bindOwnWalletOtsVersion(const std::string& token, const std::string& position,
+                                           const std::string& address) const {
+    const int preferred = pImpl_->config.otsVersion;
+    if (position.empty() || address.empty()) {
+        return preferred;
+    }
+    if (!pImpl_->secret.has_value()) {
+        throw KnishIOException("No secret available");
+    }
+    const auto version = Wallet::detectOtsVersion(pImpl_->secret.value(), token, position, address, preferred);
+    if (!version.has_value()) {
+        throw WalletException("KnishIO: wallet " + address + " is not derived from this secret at position "
+                              + position + " under OTS version 1 or 2.");
+    }
+    return version.value();
 }
 
 // Resolve a bundle's live on-ledger token wallet via the PUBLIC Balance query — the spendable
@@ -511,9 +546,8 @@ KnishIOClient::createToken(const std::string& token,
         // "ContinuID chain validation failed"). The recipient is the new token's wallet; the
         // remainder is a fresh chain head (the relay race).
         const std::string bundle = getBundle();
-        const std::string livePos = resolveContinuIdPosition(bundle);
-        Wallet source(sec, "USER", livePos);   // livePos == "" -> fresh random (genesis)
-        Wallet recipient(sec, token);          // new-token wallet, fresh random position
+        Wallet source = continuIdSourceWallet(bundle, 1024);   // no ContinuID -> fresh random (genesis)
+        Wallet recipient(sec, token, "", 64, 1024, pImpl_->config.otsVersion);   // new-token wallet, fresh random position
         Wallet remainder(sec, "USER", "", 64, 1024, source.ots_version);   // fresh random remainder
 
         std::vector<std::pair<std::string, std::string>> tokenMeta;
@@ -567,9 +601,8 @@ KnishIOClient::createWallet(const std::string& token) {
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
 
-        const std::string livePos = resolveContinuIdPosition(getBundle());
-        Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
-        Wallet newWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet);          // the wallet being defined (fresh position)
+        Wallet source = continuIdSourceWallet(getBundle(), pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
+        Wallet newWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet, pImpl_->config.otsVersion);   // the wallet being defined (fresh position)
         Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);   // fresh remainder (relay race)
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
@@ -589,8 +622,7 @@ KnishIOClient::createMeta(const std::string& metaType, const std::string& metaId
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
 
-        const std::string livePos = resolveContinuIdPosition(getBundle());
-        Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
+        Wallet source = continuIdSourceWallet(getBundle(), pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
         Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);   // fresh remainder (relay race)
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
@@ -609,9 +641,8 @@ KnishIOClient::claimShadowWallet(const std::string& token, const std::string& ba
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
 
-        const std::string livePos = resolveContinuIdPosition(getBundle());
-        Wallet source(sec, "USER", livePos, 64, pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
-        Wallet claimWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet);        // the shadow wallet being claimed
+        Wallet source = continuIdSourceWallet(getBundle(), pImpl_->config.mlKemParameterSet);   // sign at the live ContinuID position
+        Wallet claimWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet, pImpl_->config.otsVersion);   // the shadow wallet being claimed
         claimWallet.batchId = batchId;         // -> walletBatchId meta (validator matches by it)
         Wallet remainder(sec, "USER", "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);   // fresh remainder
 
@@ -650,7 +681,8 @@ KnishIOClient::transferToken(const std::string& bundleHash,
             throw KnishIOException("Insufficient balance for token " + token);
         }
 
-        Wallet source(sec, token, src.position);  // re-derives the registered address from secret+token+position
+        // re-derives the registered address from secret+token+position, at the version it was derived at
+        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));
         source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
         source.tokenUnits = src.tokenUnits;       // stackable units from the Balance response (forward-compat)
 
@@ -724,7 +756,7 @@ KnishIOClient::transferTokens(const std::string& token,
         if (srcBalance < total) {
             throw KnishIOException("Insufficient balance for token " + token);
         }
-        Wallet source(sec, token, src.position);  // re-derives the registered address
+        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));   // re-derives the registered address
         source.balance = src.balance;             // initValues debits the full balance (UTXO)
         source.tokenUnits = src.tokenUnits;
 
@@ -787,7 +819,8 @@ KnishIOClient::burnToken(const std::string& token, double amount, const std::vec
             throw KnishIOException("Insufficient balance for token " + token);
         }
 
-        Wallet source(sec, token, src.position);  // re-derives the registered address from secret+token+position
+        // re-derives the registered address from secret+token+position, at the version it was derived at
+        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));
         source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
         source.tokenUnits = src.tokenUnits;       // stackable units from the Balance response (forward-compat)
 
@@ -841,7 +874,7 @@ KnishIOClient::depositBufferToken(const std::string& token, double amount,
             throw KnishIOException("Insufficient balance for token " + token);
         }
 
-        Wallet source(sec, token, src.position);  // re-derives the registered address
+        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));   // re-derives the registered address
         source.balance = src.balance;             // initDepositBuffer debits the full balance (UTXO)
 
         // BUFFER: a FRESH same-token wallet that receives the deposited amount (B-isotope).
@@ -878,7 +911,8 @@ KnishIOClient::withdrawBufferToken(const std::string& token, double amount, cons
             if (!src.found) {
                 throw KnishIOException("No spendable buffer wallet for token " + token);
             }
-            source = std::make_shared<Wallet>(sec, token, src.position, 64, mlKem);
+            source = std::make_shared<Wallet>(sec, token, src.position, 64, mlKem,
+                                              bindOwnWalletOtsVersion(token, src.position, src.address));
             source->balance = src.balance;
             source->batchId = src.batchId;
             source->tokenUnits = src.tokenUnits;
@@ -930,12 +964,14 @@ KnishIOClient::replenishToken(const std::string& token, double amount, const std
 
         // Signed like createToken: the USER wallet at the live ContinuID pointer, a fresh USER remainder.
         const std::string bundle = getBundle();
-        Wallet source(sec, "USER", resolveContinuIdPosition(bundle), 64, mlKem);
+        Wallet source = continuIdSourceWallet(bundle, mlKem);
         Wallet remainder(sec, "USER", "", 64, mlKem, source.ots_version);
 
         // CREDITED: the identity's existing wallet for the token, or a new one.
         TokenWalletInfo existing = resolveTokenWallet(bundle, token);
-        Wallet credited(sec, token, existing.found ? existing.position : std::string(), 64, mlKem);
+        Wallet credited(sec, token, existing.found ? existing.position : std::string(), 64, mlKem,
+                        existing.found ? bindOwnWalletOtsVersion(token, existing.position, existing.address)
+                                       : pImpl_->config.otsVersion);
         if (existing.found) {
             credited.address = existing.address;
             credited.batchId = existing.batchId;
@@ -971,13 +1007,13 @@ KnishIOClient::fuseToken(const std::string& bundleHash, const std::string& token
         if (!src.found) {
             throw KnishIOException("No spendable wallet for token " + tokenSlug);
         }
-        Wallet source(sec, tokenSlug, src.position, 64, mlKem);
+        Wallet source(sec, tokenSlug, src.position, 64, mlKem, bindOwnWalletOtsVersion(tokenSlug, src.position, src.address));
         source.balance = src.balance;
         source.batchId = src.batchId;
         source.tokenUnits = src.tokenUnits;
 
         // RECIPIENT of the new unit: a fresh own wallet, or the addressless wallet of another bundle.
-        Wallet recipient(sec, tokenSlug, "", 64, mlKem);
+        Wallet recipient(sec, tokenSlug, "", 64, mlKem, pImpl_->config.otsVersion);
         if (bundleHash != senderBundle) {
             recipient.bundle = bundleHash;
             recipient.address = "";
@@ -1082,7 +1118,7 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
         // Genesis / no usable pointer: sign from a fresh AUTH wallet at a random position. The
         // validator issues an unproven token for a bundle that already has a ContinuID pointer.
         auto authorizeFromFreshAuthWallet = [&](const std::string& why) {
-            auto result = proposeAuthorization(Wallet(sec, "AUTH", "", 64, mlKem));
+            auto result = proposeAuthorization(Wallet(sec, "AUTH", "", 64, mlKem, pImpl_->config.otsVersion));
             if (result->isAuthorized()) {
                 log("INFO", "Authorization token issued from a fresh AUTH wallet (" + why + ")");
             }
@@ -1116,10 +1152,14 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
             return authorizeFromFreshAuthWallet("genesis: no USER ContinuID pointer");
         }
 
-        Wallet pointerWallet(sec, "USER", pointer->position, 64, mlKem);
-        if (!pointer->walletAddress.empty() && pointer->walletAddress != pointerWallet.address) {
+        // The pointer wallet's OTS version is the one its ledger address was derived at
+        const std::optional<int> pointerOtsVersion = pointer->walletAddress.empty()
+            ? std::optional<int>(pImpl_->config.otsVersion)
+            : Wallet::detectOtsVersion(sec, "USER", pointer->position, pointer->walletAddress, pImpl_->config.otsVersion);
+        if (!pointerOtsVersion.has_value()) {
             return authorizeFromFreshAuthWallet("the ContinuID pointer's address is not this secret's USER wallet");
         }
+        Wallet pointerWallet(sec, "USER", pointer->position, 64, mlKem, pointerOtsVersion.value());
 
         auto result = proposeAuthorization(pointerWallet);
         if (result->isAuthorized()) {
@@ -1281,6 +1321,8 @@ void KnishIOClient::validateConfig() const {
     if (pImpl_->config.maxRetries < 0) {
         throw KnishIOException("Max retries cannot be negative");
     }
+
+    (void)Wallet::checkedOtsVersion(pImpl_->config.otsVersion);
 }
 
 } // namespace knishio

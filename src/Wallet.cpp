@@ -10,6 +10,9 @@
 #include <sodium.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <algorithm>
+#include <cctype>
+#include <stdexcept>
 
 using json = nlohmann::json;
 
@@ -104,6 +107,36 @@ int Wallet::checkedOtsVersion(int otsVersion)
 		throw std::invalid_argument("KnishIO: unsupported OTS version " + std::to_string(otsVersion) + "; expected 1 or 2.");
 	}
 	return otsVersion;
+}
+
+std::optional<int> Wallet::detectOtsVersion(const std::string &secret, const std::string &token, const std::string &position, const std::string &address, int preferred)
+{
+	const int first = Wallet::checkedOtsVersion(preferred);
+	if (secret.empty() || position.empty() || address.empty()) {
+		return std::nullopt;
+	}
+	std::string wanted = address;
+	std::transform(wanted.begin(), wanted.end(), wanted.begin(),
+		[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	for (const int version : {first, first == 1 ? 2 : 1}) {
+		std::string key = Wallet::generateWalletKey(secret, token, position, version);
+		const bool matches = Wallet::generateWalletAddress(key) == wanted;
+		sodium_memzero(key.data(), key.size());
+		if (matches) {
+			return version;
+		}
+	}
+	return std::nullopt;
+}
+
+Wallet &Wallet::setOtsVersion(int otsVersion)
+{
+	const int version = Wallet::checkedOtsVersion(otsVersion);
+	if (!this->key.empty() && version != this->ots_version) {
+		throw std::logic_error("KnishIO: cannot change the OTS version of a keyed wallet.");
+	}
+	this->ots_version = version;
+	return *this;
 }
 
 /**

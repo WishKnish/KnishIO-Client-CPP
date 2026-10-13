@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <cstdint>
+#include <optional>
 #include "TokenUnit.h"
 
 namespace KnishIO {
@@ -61,6 +62,13 @@ public:
 	static std::string generateWalletKey(const std::string &secret, const std::string &token, const std::string &position, int otsVersion = 1);
 	// Returns otsVersion when it is 1 or 2; otherwise throws std::invalid_argument.
 	static int checkedOtsVersion(int otsVersion);
+	// The OTS version (1 or 2) whose key, derived from secret, token and position, has the given
+	// address (case-insensitive). Tries `preferred` first, then the other version; std::nullopt
+	// when neither matches or secret, position or address is empty.
+	static std::optional<int> detectOtsVersion(const std::string &secret, const std::string &token, const std::string &position, const std::string &address, int preferred = 1);
+	// Sets the OTS version of a wallet that holds no key. A keyed wallet keeps the version its key
+	// was derived at: changing it throws std::logic_error.
+	Wallet &setOtsVersion(int otsVersion);
 	static std::string generateWalletAddress(const std::string &key);
 
 	// Stackable (NFT) token units. splitUnits partitions this wallet's units across the SENT set
