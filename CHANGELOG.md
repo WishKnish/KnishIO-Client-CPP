@@ -16,6 +16,8 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-10-13
+
 ### Added
 
 - Opt-in OTS v2 one-time signatures (64 chains, 8192-hex key, 5464-char base64 signature):
@@ -71,6 +73,14 @@ substantiate a detail, the entry says so instead of guessing.
   derived from this secret at position <position> under OTS version 1 or 2.`) when neither
   version derives the address; the login pointer falls back to an AUTH wallet as before.
 - Hex and character-class checks cast to `unsigned char` before calling `std::isxdigit`.
+
+### Notes
+
+- 2.0.0 is a major release: `Molecule::verifyOts` returns `void` instead of `bool` and reports a
+  failed check by throwing `SignatureMalformedException` or `SignatureMismatchException` (see
+  Changed). The shared library's SOVERSION follows the major version, so it is now
+  `libknishio-client-cpp.so.2` (`libknishio-client-cpp.2.dylib` on macOS); programs linked
+  against 1.x must be rebuilt.
 
 ## [1.3.1] — 2026-10-09
 
@@ -481,7 +491,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/1.3.1...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.0.0...HEAD
+[2.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.0.0
 [1.3.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.1
 [1.3.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.0
 [1.2.4]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.2.4
