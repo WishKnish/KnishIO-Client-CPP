@@ -472,6 +472,10 @@ private:
     [[nodiscard]] int bindOwnWalletOtsVersion(const std::string& token, const std::string& position,
                                               const std::string& address) const;
 
+    // OTS version of the wallets a molecule creates for its signer (remainder, ContinuID head,
+    // deposit buffer): the higher of the source wallet's version and the client's version.
+    [[nodiscard]] int successorOtsVersion(int sourceOtsVersion) const;
+
     // Live-wiring helper (slice 5b): a bundle's on-ledger token wallet (from the Balance query) —
     // the spendable source for a value transfer. The position/balance MUST come from the validator
     // (createToken registers the token wallet at a random position; it isn't recoverable otherwise).

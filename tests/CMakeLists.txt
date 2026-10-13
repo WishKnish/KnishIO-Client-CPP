@@ -69,6 +69,28 @@ set_tests_properties(CipherHashLive PROPERTIES
     SKIP_RETURN_CODE 77
 )
 
+# Live OTS version migration test. Gated at runtime on OTS_MIGRATION_TEST_URL: unset, it exits 77
+# and ctest reports it Skipped, not Passed.
+add_executable(ots_migration_live_test ots_migration_live_test.cpp)
+target_link_libraries(ots_migration_live_test
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(ots_migration_live_test PRIVATE cxx_std_20)
+set_target_properties(ots_migration_live_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME OtsMigrationLive
+    COMMAND ots_migration_live_test
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(OtsMigrationLive PROPERTIES
+    LABELS "integration;network"
+    TIMEOUT 120
+    SKIP_RETURN_CODE 77
+)
+
 # PQ-transport (Phase E): an encryption-enabled client must fail CLOSED when the ML-KEM transport
 # keys are missing, while still letting the (unencryptable) auth-bootstrap operations through.
 # No validator needed — the URI is a closed loopback port.

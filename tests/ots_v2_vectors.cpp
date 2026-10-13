@@ -190,6 +190,16 @@ int signerVersion(const std::string& secret, const json& proposal) {
     return version;
 }
 
+// The OTS version of the proposal's new ContinuID head (its I-atom, found by isotope); 0 for none.
+int successorVersion(const std::string& secret, const json& proposal) {
+    for (const auto& atom : proposal["variables"]["molecule"]["atoms"]) {
+        if (atomString(atom, "isotope") == "I") {
+            return versionOf(secret, "USER", atomString(atom, "position"), atomString(atom, "walletAddress"));
+        }
+    }
+    return 0;
+}
+
 std::unique_ptr<knishio::KnishIOClient> clientAt(const std::string& uri, int otsVersion) {
     return knishio::KnishIOClient::Builder().uris({uri}).cellSlug("public").maxRetries(0)
         .timeout(std::chrono::milliseconds(10000)).otsVersion(otsVersion).build();
@@ -321,9 +331,67 @@ int runClient() {
             const json& meta = proposals[1]["variables"]["molecule"]["atoms"][0];
             check(atomString(meta, "walletAddress") == addressV2 && signerVersion(secret, proposals[1]) == 2,
                   "the source wallet at a v2 ContinuID head is v2");
+            check(successorVersion(secret, proposals[0]) == 2, "the login's new ContinuID head stays v2");
+            check(successorVersion(secret, proposals[1]) == 2, "createMeta's new ContinuID head stays v2");
         }
     } catch (const std::exception& e) {
         check(false, "client at version 1 with a v2 ledger wallet", std::string("threw: ") + e.what());
+    }
+
+    try {
+        std::cout << "\nA client at OTS version 2 moves a v1 identity to v2\n";
+        knishio_test::StubValidator stub;
+        stub.setContinuId(continuIdAt(bundle, position, addressV1));
+        auto client = clientAt(stub.uri(), 2);
+        (void)client->requestAuthToken(secret).get();   // the ContinuID pointer is a v1 USER wallet
+        (void)client->createMeta("OtsV2", "migrate", {{"k", "v"}}).get();
+        const auto proposals = stub.requests("ProposeMolecule");
+        check(proposals.size() == 2, "two molecules proposed", "got " + std::to_string(proposals.size()));
+        if (proposals.size() == 2) {
+            const json& login = proposals[0]["variables"]["molecule"]["atoms"][0];
+            check(atomString(login, "walletAddress") == addressV1 && signerVersion(secret, proposals[0]) == 1,
+                  "the login signs from the v1 ContinuID pointer");
+            check(successorVersion(secret, proposals[0]) == 2, "the login's new ContinuID head is v2");
+            const json& meta = proposals[1]["variables"]["molecule"]["atoms"][0];
+            check(atomString(meta, "walletAddress") == addressV1 && signerVersion(secret, proposals[1]) == 1,
+                  "createMeta signs from the v1 ContinuID head");
+            check(successorVersion(secret, proposals[1]) == 2, "createMeta's new ContinuID head is v2");
+        }
+    } catch (const std::exception& e) {
+        check(false, "client at version 2 with a v1 identity", std::string("threw: ") + e.what());
+    }
+
+    try {
+        std::cout << "\nA client at OTS version 2 creates a v2 token remainder\n";
+        knishio_test::StubValidator stub;
+        auto client = clientAt(stub.uri(), 2);
+        (void)client->requestAuthToken(secret).get();   // no ContinuID: fresh AUTH wallet
+        const std::string tokenPosition(64, 'd');
+        const std::string tokenAddressV1 =
+            Wallet::generateWalletAddress(Wallet::generateWalletKey(secret, "OTSV2", tokenPosition, 1));
+        stub.setBalance({{"position", tokenPosition}, {"address", tokenAddressV1}, {"tokenSlug", "OTSV2"},
+                         {"amount", "100"}, {"pubkey", nullptr}, {"batchId", nullptr}, {"bundleHash", bundle},
+                         {"tokenUnits", json::array()}});
+        const std::string other = Wallet::generateBundleHash(knishio::KnishIOClient::generateSecret());
+        (void)client->transferToken(other, "OTSV2", 10).get();
+        const auto proposals = stub.requests("ProposeMolecule");
+        check(proposals.size() == 2, "two molecules proposed", "got " + std::to_string(proposals.size()));
+        if (proposals.size() == 2) {
+            const json& atoms = proposals[1]["variables"]["molecule"]["atoms"];
+            check(atomString(atoms[0], "walletAddress") == tokenAddressV1 && signerVersion(secret, proposals[1]) == 1,
+                  "the transfer signs from the v1 balance wallet");
+            int remainderVersion = -1;
+            for (const auto& atom : atoms) {
+                if (atomString(atom, "isotope") == "V" && atomString(atom, "walletAddress") != tokenAddressV1
+                    && !atomString(atom, "position").empty()) {
+                    remainderVersion = versionOf(secret, "OTSV2", atomString(atom, "position"),
+                                                 atomString(atom, "walletAddress"));
+                }
+            }
+            check(remainderVersion == 2, "the token remainder is v2", "got " + std::to_string(remainderVersion));
+        }
+    } catch (const std::exception& e) {
+        check(false, "token remainder at version 2", std::string("threw: ") + e.what());
     }
 
     try {

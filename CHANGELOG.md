@@ -55,8 +55,12 @@ substantiate a detail, the entry says so instead of guessing.
 - `Wallet::generateWalletKey` hashes a non-hex secret (SHAKE256, 1024 bits) or non-hex position
   (SHAKE256, 256 bits) instead of rejecting it, matching the other SDKs. An empty secret or
   position still throws `std::invalid_argument`.
-- Remainder, buffer and burn wallets that `KnishIOClient` builds alongside a source wallet use
-  the source wallet's OTS version.
+- Remainder, ContinuID and buffer wallets that `KnishIOClient` builds alongside a source wallet
+  take the higher of the source wallet's and the client's OTS version; burn wallets use the
+  source wallet's version.
+- A client set to `otsVersion(2)` creates the ContinuID head, token remainders and deposit buffer
+  of every molecule it signs at version 2, so an identity created at version 1 moves to version 2
+  on its next sign-in or molecule. A client at version 1 keeps a version 2 identity at version 2.
 - Wallets the ledger returns for this client (the ContinuID head the USER-signed operations
   sign from and the login pointer, and the balance wallets transfers, burns, buffer deposits
   and withdrawals, replenishment and fusion use) are used at the OTS version their address was
