@@ -16,6 +16,8 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-10-16
+
 ### Added
 
 - `Molecule::verifyFromServerData` verifies a molecule exactly as a validator's GraphQL API
@@ -503,7 +505,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.0.0...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.1.0...HEAD
+[2.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.1.0
 [2.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.0.0
 [1.3.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.1
 [1.3.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.0
