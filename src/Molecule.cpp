@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <cctype>
+#include <regex>
 
 #include "third_party/BigInt/bigInt.h"
 #include "Wallet.h"
@@ -919,6 +921,9 @@ std::string Molecule::toJson() const
 		jsonAtom["otsFragment"] = atom.otsFragment;
 		jsonAtom["createdAt"] = std::to_string(atom.createdAt.count());
 		jsonAtom["index"] = atom.index;  // Include index for JavaScript canonical compliance
+		if (atom.version.has_value()) {
+			jsonAtom["version"] = atom.version.value_or(std::string());
+		}
 
 		jsonMolecule["atoms"].push_back(jsonAtom);
 	}
@@ -1094,6 +1099,232 @@ bool Molecule::verifyMolecularHash(const Molecule &molecule)
 	}
 
 	return false;
+}
+
+namespace {
+
+// Howard Hinnant's days_from_civil: days since 1970-01-01 in the proleptic Gregorian calendar.
+long long daysFromCivil(long long y, unsigned m, unsigned d)
+{
+	y -= m <= 2 ? 1 : 0;
+	const long long era = (y >= 0 ? y : y - 399) / 400;
+	const auto yoe = static_cast<unsigned>(y - era * 400);
+	const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+	const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+	return era * 146097 + static_cast<long long>(doe) - 719468;
+}
+
+std::optional<long long> parseRfc3339Millis(const std::string &s)
+{
+	static const std::regex pattern(R"(^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.(\d+))?(Z|([+-])(\d{2}):(\d{2}))$)");
+	std::smatch m;
+	if (!std::regex_match(s, m, pattern)) {
+		return std::nullopt;
+	}
+	const auto num = [&m](size_t i) { return std::stoll(m[i].str()); };
+	const long long month = num(2);
+	const long long day = num(3);
+	const long long hour = num(4);
+	const long long minute = num(5);
+	const long long second = num(6);
+	if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 60) {
+		return std::nullopt;
+	}
+	long long millis = 0;
+	if (m[8].matched) {
+		std::string fraction = m[8].str().substr(0, 3);
+		fraction.append(3 - fraction.size(), '0');
+		millis = std::stoll(fraction);
+	}
+	long long offsetMinutes = 0;
+	if (m[10].matched) {
+		offsetMinutes = num(11) * 60 + num(12);
+		if (m[10].str() == "-") {
+			offsetMinutes = -offsetMinutes;
+		}
+	}
+	const long long days = daysFromCivil(num(1), static_cast<unsigned>(month), static_cast<unsigned>(day));
+	const long long seconds = days * 86400 + hour * 3600 + minute * 60 + second - offsetMinutes * 60;
+	return seconds * 1000 + millis;
+}
+
+// Served createdAt (any JSON) as client-format JSON: a millisecond string, or null when absent.
+nlohmann::json servedCreatedAt(const nlohmann::json &value)
+{
+	if (value.is_number_integer()) {
+		return Molecule::toSignedTimestamp(value.get<long long>());
+	}
+	if (value.is_string()) {
+		const auto normalized = Molecule::toSignedTimestamp(value.get<std::string>());
+		return normalized ? nlohmann::json(*normalized) : nlohmann::json(nullptr);
+	}
+	return nullptr;
+}
+
+// metasJson as a [{key, value}] array: a string is parsed, an object becomes its entries,
+// anything else (or a parse failure) is empty.
+nlohmann::json servedMeta(const nlohmann::json &metasJson)
+{
+	nlohmann::json parsed = metasJson.is_string()
+		? nlohmann::json::parse(metasJson.get<std::string>(), nullptr, false)
+		: metasJson;
+	if (parsed.is_array()) {
+		return parsed;
+	}
+	nlohmann::json meta = nlohmann::json::array();
+	if (parsed.is_object()) {
+		for (const auto &item : parsed.items()) {
+			meta.push_back({{"key", item.key()}, {"value", item.value()}});
+		}
+	}
+	return meta;
+}
+
+const nlohmann::json *member(const nlohmann::json &object, const char *key)
+{
+	const auto it = object.find(key);
+	return it == object.end() || it->is_null() ? nullptr : &*it;
+}
+
+// A served molecule as client-format molecule JSON (what Molecule::jsonToObject reads).
+nlohmann::json servedToClient(const nlohmann::json &served, const std::optional<std::string> &forcedVersion)
+{
+	if (!served.is_object()) {
+		throw std::invalid_argument("served molecule is not a JSON object");
+	}
+	const auto *servedAtoms = member(served, "atoms");
+	if (servedAtoms == nullptr || !servedAtoms->is_array()) {
+		throw std::invalid_argument("served molecule has no atoms");
+	}
+
+	nlohmann::json molecule = nlohmann::json::object();
+	for (const auto &[from, to] : {std::pair{"bundleHash", "bundle"}, std::pair{"molecularHash", "molecularHash"},
+	                                std::pair{"cellSlug", "cellSlug"}, std::pair{"status", "status"}}) {
+		if (const auto *v = member(served, from); v != nullptr && v->is_string()) {
+			molecule[to] = *v;
+		}
+	}
+	if (const auto *v = member(served, "createdAt")) {
+		if (auto createdAt = servedCreatedAt(*v); !createdAt.is_null()) {
+			molecule["createdAt"] = createdAt;
+		}
+	}
+
+	molecule["atoms"] = nlohmann::json::array();
+	for (const auto &servedAtom : *servedAtoms) {
+		if (!servedAtom.is_object()) {
+			throw std::invalid_argument("served atom is not a JSON object");
+		}
+		nlohmann::json atom = nlohmann::json::object();
+		for (const char *key : {"position", "walletAddress", "isotope", "batchId", "metaType", "metaId", "otsFragment"}) {
+			if (const auto *v = member(servedAtom, key); v != nullptr && v->is_string()) {
+				atom[key] = *v;
+			}
+		}
+		const auto *token = member(servedAtom, "tokenSlug");
+		if (token == nullptr) {
+			token = member(servedAtom, "token");
+		}
+		if (token != nullptr && token->is_string()) {
+			atom["token"] = *token;
+		}
+		if (const auto *v = member(servedAtom, "value")) {
+			atom["value"] = v->is_string() ? v->get<std::string>() : v->dump();
+		}
+		if (const auto *v = member(servedAtom, "index"); v != nullptr && v->is_number_integer()) {
+			atom["index"] = *v;
+		}
+		if (const auto *v = member(servedAtom, "createdAt")) {
+			if (auto createdAt = servedCreatedAt(*v); !createdAt.is_null()) {
+				atom["createdAt"] = createdAt;
+			}
+		}
+		if (forcedVersion) {
+			atom["version"] = *forcedVersion;
+		} else if (const auto *v = member(servedAtom, "version")) {
+			atom["version"] = *v;
+		}
+		const auto *metas = member(servedAtom, "metasJson");
+		atom["meta"] = metas != nullptr ? servedMeta(*metas) : nlohmann::json::array();
+		molecule["atoms"].push_back(atom);
+	}
+	return molecule;
+}
+
+ServedVerification verifyClient(const nlohmann::json &served, const std::optional<std::string> &forcedVersion, bool &hashMismatch)
+{
+	ServedVerification result;
+	hashMismatch = false;
+	try {
+		const Molecule molecule = Molecule::jsonToObject(servedToClient(served, forcedVersion).dump());
+		if (!molecule.molecularHash.empty()) {
+			result.molecularHash = molecule.molecularHash;
+		}
+		if (!Molecule::verifyMolecularHash(molecule)) {
+			hashMismatch = true;
+			result.error = "Molecular hash mismatch";
+			return result;
+		}
+		Molecule::check(molecule);
+		result.verified = true;
+	} catch (const std::exception &e) {
+		result.error = e.what();
+	}
+	return result;
+}
+
+} // namespace
+
+std::optional<std::string> Molecule::toSignedTimestamp(const std::string &createdAt)
+{
+	if (createdAt.empty()) {
+		return std::nullopt;
+	}
+	if (std::all_of(createdAt.begin(), createdAt.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) {
+		return createdAt;
+	}
+	if (const auto millis = parseRfc3339Millis(createdAt)) {
+		return std::to_string(*millis);
+	}
+	return createdAt;
+}
+
+std::string Molecule::toSignedTimestamp(long long createdAt)
+{
+	return std::to_string(createdAt);
+}
+
+Molecule Molecule::fromServerData(const std::string &servedJson)
+{
+	return jsonToObject(servedToClient(nlohmann::json::parse(servedJson), std::nullopt).dump());
+}
+
+ServedVerification Molecule::verifyFromServerData(const std::string &servedJson)
+{
+	const nlohmann::json served = nlohmann::json::parse(servedJson, nullptr, false);
+	if (served.is_discarded()) {
+		ServedVerification result;
+		result.error = "served molecule is not valid JSON";
+		return result;
+	}
+
+	bool hashMismatch = false;
+	ServedVerification result = verifyClient(served, std::nullopt, hashMismatch);
+	if (result.verified || !hashMismatch) {
+		return result;
+	}
+	// Served without atom versions: the hash may cover the versioned view.
+	const auto &atoms = served.at("atoms");
+	if (std::any_of(atoms.begin(), atoms.end(), [](const nlohmann::json &a) { return member(a, "version") != nullptr; })) {
+		return result;
+	}
+	for (const char *version : {"4", "3"}) {
+		result = verifyClient(served, std::string(version), hashMismatch);
+		if (result.verified) {
+			break;
+		}
+	}
+	return result;
 }
 
 namespace {

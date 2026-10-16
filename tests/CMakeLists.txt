@@ -229,6 +229,34 @@ set_tests_properties(OtsV2Vectors PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
 )
 
+# Served-molecule verification (Molecule::verifyFromServerData) and the shared Version4 hash
+# vectors, read from the vendored copies in tests/fixtures/ (KNISHIO_SERVED_MOLECULES and
+# KNISHIO_VERSION4_VECTORS override the paths); a missing file exits 77 (skipped).
+add_executable(served_molecules served_molecules.cpp)
+target_link_libraries(served_molecules
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(served_molecules PRIVATE cxx_std_20)
+target_compile_definitions(served_molecules PRIVATE
+    KNISHIO_SERVED_MOLECULES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/served-molecules.json"
+    KNISHIO_VERSION4_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/version4-hash-vectors.json"
+)
+set_target_properties(served_molecules PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME ServedMolecules
+    COMMAND served_molecules
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(ServedMolecules PROPERTIES
+    LABELS "molecule;served;vectors"
+    TIMEOUT 120
+    SKIP_RETURN_CODE 77
+    REQUIRED_FILES $<TARGET_FILE:served_molecules>
+)
+
 # Client-level OTS version: the client option, version detection for the client's own ledger
 # wallets, and the wallets the client signs from, driven against the loopback stub validator.
 add_test(

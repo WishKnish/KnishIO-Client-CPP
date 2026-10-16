@@ -2,6 +2,8 @@
 
 #include <cstdint>  // int8_t in the enumerate/normalize signatures below
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "Atom.h"
 #include "TokenUnit.h"
@@ -9,6 +11,13 @@
 namespace KnishIO {
 
 class Wallet;
+
+// Result of Molecule::verifyFromServerData.
+struct ServedVerification {
+	std::optional<std::string> molecularHash;
+	bool verified = false;
+	std::string error;   // empty when verified
+};
 
 /**
  * class Molecule
@@ -90,6 +99,19 @@ public:
 	// isotopeB()/isotopeF() in the JS reference; verifyTokenIsotopeV() delegates to this
 	// when it skips the V-only sum, so that the skip is not an unconditional accept.
 	static bool verifyCrossIsotopeConservation(const Molecule &molecule);
+
+	// Builds a molecule from its JSON exactly as a validator's GraphQL API serves it (bundleHash,
+	// tokenSlug, metasJson, RFC 3339 createdAt, optional atom versions). Throws on malformed input.
+	static Molecule fromServerData(const std::string &servedJson);
+	// Verifies a served molecule: the molecular hash, then check(). When the hash does not match
+	// and no served atom carries a version, retries with version "4" on every atom, then "3".
+	// Never throws; malformed input gives verified = false with an error.
+	static ServedVerification verifyFromServerData(const std::string &servedJson);
+	// Served createdAt as a millisecond string: digit strings unchanged, RFC 3339 timestamps
+	// converted to epoch milliseconds (fraction truncated to 3 digits, offset applied), other
+	// strings unchanged; an empty string is absent.
+	static std::optional<std::string> toSignedTimestamp(const std::string &createdAt);
+	static std::string toSignedTimestamp(long long createdAt);
 
 private:
 	// Appends the ContinuID (I-isotope) atom, mirroring JS Molecule.addContinuIdAtom():

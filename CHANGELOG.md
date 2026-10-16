@@ -16,6 +16,18 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+### Added
+
+- `Molecule::verifyFromServerData` verifies a molecule exactly as a validator's GraphQL API
+  serves it: RFC 3339 timestamps, `metasJson`, atoms carrying any version, and molecules served
+  without their atom versions. It returns a `ServedVerification` (`molecularHash`, `verified`,
+  `error`) and never throws; `Molecule::fromServerData` builds the molecule and
+  `Molecule::toSignedTimestamp` normalizes a served `createdAt` to epoch milliseconds.
+- `Atom::version` (optional). `Atom::jsonToObject` reads `version` and `index`, and
+  `Molecule::toJson` writes `version` only when it is set, so molecules this SDK signs are
+  unchanged. When every atom carries a version, `Atom::hashAtoms` hashes the structured view
+  that `Atom::version4ViewJson` returns; the shared `version4-hash-vectors.json` cases pass.
+
 ## [2.0.0] — 2026-10-13
 
 ### Added
