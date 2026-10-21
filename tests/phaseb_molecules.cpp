@@ -376,7 +376,7 @@ void replenishCreatesWalletForStackableUnits() {
     check(jmeta(c, "tokenUnits") == R"([["R1","R1",{}],["R2","R2",{}]])", "tokenUnits compact triples",
           jmeta(c, "tokenUnits").value_or("<none>"));
     const auto position = jmeta(c, "position").value_or("");
-    check(position.size() == 64 && jmeta(c, "address") == KnishIO::Wallet(s.secret, "RSTK", position).address,
+    check(position.size() == 64 && jmeta(c, "address") == KnishIO::Wallet(s.secret, "RSTK", position, 64, 1024, 2).address,
           "credits a new wallet of the identity");
 }
 
@@ -413,7 +413,7 @@ void fuseOwnBundleWithBatchedSource() {
               == R"([["FUSED","FUSED",{"fusedTokenUnits":[["U2","U2",{}],["U4","U4",{}],["U5","U5",{}]]}]])",
           "F carries N with fusedTokenUnits", jmeta(a[2], "tokenUnits").value_or("<none>"));
     check(jstr(a[2], "metaId") == s.bundle && jstr(a[2], "walletAddress").size() == 64
-              && jstr(a[2], "walletAddress") == KnishIO::Wallet(s.secret, "STK", jstr(a[2], "position")).address,
+              && jstr(a[2], "walletAddress") == KnishIO::Wallet(s.secret, "STK", jstr(a[2], "position"), 64, 1024, 2).address,
           "F recipient is a fresh wallet of the own bundle");
     check(jstr(a[0], "batchId") == "batch-src" && jstr(a[3], "batchId") == "batch-src", "source and remainder keep the batch id");
     const std::string burnBatch = jstr(a[1], "batchId");
@@ -481,7 +481,7 @@ void withdrawReadsBufferAndRemaindersFresh() {
               && a[1]["batchId"].is_null(),
           "recipient: addressless, own bundle, no batch id");
     check(jstr(a[2], "value") == "30" && jstr(a[2], "position") != bufferPos && jstr(a[2], "position").size() == 64
-              && jstr(a[2], "walletAddress") == KnishIO::Wallet(s.secret, "BUF", jstr(a[2], "position")).address,
+              && jstr(a[2], "walletAddress") == KnishIO::Wallet(s.secret, "BUF", jstr(a[2], "position"), 64, 1024, 2).address,
           "remainder: 30 at a fresh position of the identity");
 }
 

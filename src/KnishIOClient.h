@@ -71,7 +71,7 @@ public:
         int maxRetries = 3;                              ///< Maximum retry attempts
         std::chrono::milliseconds retryDelay{1000};      ///< Delay between retries
         int mlKemParameterSet = 1024;                     ///< ML-KEM parameter set (1024 default, 768 step-back)
-        int otsVersion = 1;                               ///< OTS version of the keys the client creates from its secret (1 default, or 2)
+        int otsVersion = 2;                               ///< OTS version of the keys the client creates from its secret (2 default, or 1)
     };
 
     /**
@@ -101,9 +101,9 @@ public:
         Builder& maxRetries(int retries);
         Builder& retryDelay(std::chrono::milliseconds delay);
         Builder& mlKemParameterSet(int parameterSet = 1024);
-        // OTS version of the keys the client creates from its secret: 1 (default) or 2. Throws
+        // OTS version of the keys the client creates from its secret: 2 (default) or 1. Throws
         // std::invalid_argument for any other value.
-        Builder& otsVersion(int version = 1);
+        Builder& otsVersion(int version = 2);
         
         [[nodiscard]] std::unique_ptr<KnishIOClient> build() const;
         
@@ -132,7 +132,7 @@ public:
     void setCellSlug(const std::string& cellSlug);
 
     /**
-     * OTS version of the keys this client creates from its secret (1 default, or 2). Wallets the
+     * OTS version of the keys this client creates from its secret (2 default, or 1). Wallets the
      * ledger returns keep the version their address was derived at.
      */
     [[nodiscard]] int getOtsVersion() const noexcept;

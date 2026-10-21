@@ -317,8 +317,8 @@ int runClient() {
         check(std::string(e.what()) == "KnishIO: unsupported OTS version 0; expected 1 or 2.",
               "a Config with otsVersion 0 is refused", e.what());
     }
-    check(knishio::KnishIOClient::Builder().uris({"http://127.0.0.1:9/graphql"}).build()->getOtsVersion() == 1,
-          "the client OTS version defaults to 1");
+    check(knishio::KnishIOClient::Builder().uris({"http://127.0.0.1:9/graphql"}).build()->getOtsVersion() == 2,
+          "the client OTS version defaults to 2");
 
     try {
         std::cout << "\nA client at OTS version 2 creates v2 keys" << std::endl;
