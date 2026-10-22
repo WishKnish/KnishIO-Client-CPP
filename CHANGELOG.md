@@ -16,11 +16,15 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-10-21
+
 ### Changed
 
-- `KnishIOClient` creates keys and signs at OTS version 2 by default (was 1). An identity a
-  version-2 client signs for moves to version 2 and stays there, so the client needs a validator
-  that accepts version 2 (0.8.0 or later). Pass `Builder().otsVersion(1)` (or set
+- `KnishIOClient` defaults to OTS version 2 and ML-KEM-1024. It creates keys and signs at OTS
+  version 2 (was 1); ML-KEM-1024 stays the post-quantum transport parameter set, as it has been
+  by default since 1.0.0 (ML-KEM-768 remains the opt-in step-back). An identity a version-2
+  client signs for moves to version 2 and stays there, so the client needs a validator that
+  accepts version 2 (0.8.0 or later). Pass `Builder().otsVersion(1)` (or set
   `Config::otsVersion = 1`) to keep version 1. Standalone `Wallet` construction still defaults to
   version 1.
 
@@ -513,7 +517,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.1.0...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.2.0...HEAD
+[2.2.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.2.0
 [2.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.1.0
 [2.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.0.0
 [1.3.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/1.3.1
