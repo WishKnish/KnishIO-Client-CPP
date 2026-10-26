@@ -129,7 +129,6 @@ set(KNISHIO_SOURCES
     src/query/Query.cpp
     src/query/QueryBalance.cpp
     src/mutation/Mutation.cpp
-    src/third_party/BigInt/bigInt.cpp
     src/third_party/Keccak/Keccak-readable-and-compact.cpp
     src/storage/StorageBackend.cpp
     src/storage/SecretEnvelope.cpp

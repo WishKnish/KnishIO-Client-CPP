@@ -7,7 +7,6 @@
 #include <cctype>
 #include <regex>
 
-#include "third_party/BigInt/bigInt.h"
 #include "Wallet.h"
 #include "utility.h"
 #include "AtomsNotFoundException.h"

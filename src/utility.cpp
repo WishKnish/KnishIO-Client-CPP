@@ -1,8 +1,9 @@
 #include "utility.h"
 
-#include "third_party/BigInt/bigInt.h"
 #include "third_party/Keccak/Keccak.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <random>
 #include <codecvt>
 #include <sodium.h>
@@ -28,6 +29,16 @@ std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom
 		throw std::invalid_argument("Base must be between 1 and 256");
 	}
 
+	// Base 1 has no positional representation (repeated division by 1 never reaches zero).
+	if (baseTo == 1) {
+		throw std::invalid_argument("Base must be between 2 and 256");
+	}
+
+	// The input is parsed as hexadecimal; no other input base is implemented.
+	if (baseFrom != 16) {
+		throw std::invalid_argument("Only base 16 input is supported");
+	}
+
 	size_t symbol_table_len = strlen(baseToSymbolTable);
 	if (symbol_table_len < baseTo) {
 		throw std::invalid_argument("Symbol table too short for specified base");
@@ -41,33 +52,63 @@ std::string charsetBaseConvert(const std::string &hashHex, unsigned int baseFrom
 	}
 
 	try {
-		BigInt::Rossi val(hashHex, BigInt::HEX_DIGIT);
+		// Skip leading zero digits; an all-zero input is the value zero, written as one zero symbol.
+		const size_t first = hashHex.find_first_not_of('0');
+		if (first == std::string::npos) {
+			return std::string(1, baseToSymbolTable[0]);
+		}
 
+		// Pack the significant hex digits into big-endian 32-bit limbs (8 digits per limb).
+		// The most significant limb takes the leading (len % 8) digits, or a full 8.
+		const size_t digits = hashHex.size() - first;
+		std::vector<uint32_t> limbs;
+		limbs.reserve((digits + 7) / 8);
+		size_t head = digits % 8;
+		if (head == 0) {
+			head = 8;
+		}
+		uint32_t limb = 0;
+		size_t inLimb = 0;
+		for (size_t i = first; i < hashHex.size(); ++i) {
+			const unsigned char c = static_cast<unsigned char>(hashHex[i]);
+			uint32_t nibble = 0;
+			if (c >= '0' && c <= '9') {
+				nibble = static_cast<uint32_t>(c - '0');
+			} else if (c >= 'a' && c <= 'f') {
+				nibble = static_cast<uint32_t>(c - 'a' + 10);
+			} else {
+				nibble = static_cast<uint32_t>(c - 'A' + 10);
+			}
+			limb = (limb << 4U) | nibble;
+			++inLimb;
+			if (inLimb == head) {
+				limbs.push_back(limb);
+				limb = 0;
+				inLimb = 0;
+				head = 8;
+			}
+		}
+
+		// Repeated long division by baseTo; each remainder is the next least significant output digit.
 		std::string res;
-		res.reserve(hashHex.length() * 2); // Reasonable estimate to avoid frequent reallocations
-		
-		BigInt::Rossi rem;
-		BigInt::Rossi base(baseTo);
-
-		do {
-			val = val.divide(val, base, &rem);
-
-			// Convert remainder to integer with bounds checking
-			std::string rem_str = rem.toStrDec();
-			char* end_ptr = nullptr;
-			long remInt = strtol(rem_str.c_str(), &end_ptr, 10);
-
-			// Validate conversion and bounds
-			if (end_ptr != rem_str.c_str() + rem_str.length()) {
-				throw std::runtime_error("Failed to convert remainder to integer");
+		res.reserve(digits * 2); // Reasonable estimate to avoid frequent reallocations
+		std::vector<uint32_t> quotient;
+		quotient.reserve(limbs.size());
+		while (!limbs.empty()) {
+			uint64_t rem = 0;
+			quotient.clear();
+			for (uint32_t l : limbs) {
+				const uint64_t cur = (rem << 32U) | static_cast<uint64_t>(l);
+				const auto q = static_cast<uint32_t>(cur / baseTo);
+				rem = cur % baseTo;
+				if (!quotient.empty() || q != 0) {
+					quotient.push_back(q);
+				}
 			}
-
-			if (remInt < 0 || static_cast<unsigned long>(remInt) >= baseTo) {
-				throw std::runtime_error("Remainder out of valid range for base");
-			}
-
-			res.insert(res.begin(), baseToSymbolTable[remInt]);
-		} while (val != BigInt::Rossi(0));
+			res.push_back(baseToSymbolTable[static_cast<size_t>(rem)]);
+			limbs.swap(quotient);
+		}
+		std::reverse(res.begin(), res.end());
 
 		return res;
 	} catch (const std::exception& e) {

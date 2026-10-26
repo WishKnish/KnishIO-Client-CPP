@@ -33,7 +33,6 @@ g++ -std=c++17 -I../src -I../src/third_party -I${SODIUM_PREFIX}/include \
     ../src/Wallet.cpp \
     ../src/crypto.cpp \
     ../src/crypto_bigint.cpp \
-    ../src/third_party/BigInt/bigInt.cpp \
     ../src/third_party/Keccak/Keccak-readable-and-compact.cpp \
     -L${SODIUM_PREFIX}/lib -lsodium \
     -o shake256_validation \

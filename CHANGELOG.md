@@ -16,6 +16,21 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+### Changed
+
+- `charsetBaseConvert` (the base-16 to base-17 conversion behind `Atom::hashAtoms` molecular
+  hashes) is reimplemented as first-party long division over 32-bit limbs. Its output is
+  unchanged: a differential run of 2,817 conversions against the previous implementation,
+  cross-checked with Python's arbitrary-precision integers, produced identical strings. It now
+  also rejects `baseFrom != 16` ("Only base 16 input is supported") and `baseTo == 1` ("Base must
+  be between 2 and 256"), inputs the previous implementation ignored or never finished on.
+
+### Removed
+
+- The vendored `src/third_party/BigInt/` (Rossi/Vinokur `BigInt`, GPL-2.0-or-later). It was used
+  only by `charsetBaseConvert`. `src/Molecule.cpp` and `src/Wallet.cpp` included its header
+  without using it.
+
 ## [2.2.0] — 2026-10-21
 
 ### Changed

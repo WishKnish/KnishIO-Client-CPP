@@ -3,7 +3,6 @@
 #include "utility.h"
 #include "crypto.h"
 #include "crypto_bigint.h"
-#include "third_party/BigInt/bigInt.h"
 #include "third_party/nlohmann/json.hpp"
 #include "KnishIOClient.h"
 #include "kcore_bridge.h"
@@ -161,7 +160,7 @@ std::string Wallet::generateWalletKey(const std::string &secret, const std::stri
 
 	try {
 		// SECURITY: Using constant-time BigInt operations to prevent timing attacks
-		// This replaces the vulnerable BigInt::Rossi operations that could leak timing information
+		// This replaces the earlier variable-time arbitrary-precision addition that could leak timing information
 
 		// Stage 0: a non-hex secret or position is normalized via SHAKE256
 		std::string secretHex = knishio::WalletCrypto::isValidHex(secret) ? secret : shake256Hex(secret, 1024);
