@@ -294,9 +294,32 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  # The CycloneDX SBOM attached to the Release (knishio-client-cpp-<ver>.cdx.json), from the
+  # committed .github/sbom-components.json, checked against the mlkem-native gitlink, the
+  # vendored json.hpp and Keccak sha256s, and the kcore sha256 pins above. It runs on dispatch
+  # too, so a dry run proves generation. No OSV scan here: ci.yml and audit.yml gate on that.
+  sbom:
+    name: SBOM (CycloneDX)
+    needs: version-gate
+    runs-on: ubuntu-latest
+    steps:
+      # No submodules: sbom.py reads the external/mlkem-native gitlink with `git ls-tree HEAD`.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate SBOM
+        run: bash .github/scripts/sbom.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: sbom
+          path: sbom-out/*.cdx.json
+          if-no-files-found: error
+
   release:
     name: create GitHub Release
-    needs: [version-gate, package, source]
+    needs: [version-gate, package, source, sbom]
     if: github.event_name == 'push'   # dispatch = dry run; never creates a Release
     runs-on: ubuntu-latest
     steps:
@@ -307,6 +330,8 @@ jobs:
         with:
           persist-credentials: false
 
+      # No name/pattern: every artifact of this run (both platform packages, source, sbom)
+      # merges into dist/.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           path: dist
@@ -350,4 +375,6 @@ jobs:
           # synthesizing that needs the previous tag — i.e. fetch-depth: 0 on a publish job —
           # which is not worth a full-history clone for a cosmetic link.
           body_path: /tmp/release-notes.md
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/*.cdx.json

@@ -1,0 +1,65 @@
+{
+  "components": [
+    {
+      "type": "library",
+      "group": "pq-code-package",
+      "name": "mlkem-native",
+      "version": "1.2.0",
+      "licenses": [{"expression": "Apache-2.0 OR ISC OR MIT"}],
+      "purl": "pkg:github/pq-code-package/mlkem-native@v1.2.0",
+      "externalReferences": [{"type": "vcs", "url": "https://github.com/pq-code-package/mlkem-native"}],
+      "properties": [
+        {"name": "knishio:commit", "value": "0ba906cb14b1c241476134d7403a811b382ca498"},
+        {"name": "knishio:verify:submodule", "value": "external/mlkem-native"}
+      ]
+    },
+    {
+      "type": "library",
+      "group": "WishKnish",
+      "name": "KnishIO-Crypto-Core",
+      "version": "0.2.0",
+      "licenses": [{"license": {"id": "GPL-3.0-or-later"}}],
+      "externalReferences": [
+        {"type": "vcs", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core"},
+        {"type": "distribution", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.0/knishio-crypto-core-0.2.0-linux-x64-gnu.tar.gz",
+         "hashes": [{"alg": "SHA-256", "content": "137a7adb73df0a1fe84656cf02d8e6513a6dec0a548ed9adc7c220dac71e4b05"}]},
+        {"type": "distribution", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.0/knishio-crypto-core-0.2.0-darwin-universal.tar.gz",
+         "hashes": [{"alg": "SHA-256", "content": "a482d979d48c1dfb8ce3d8528795e217a3e304f8c5eeed363097067d67746329"}]}
+      ],
+      "properties": [
+        {"name": "knishio:verify:contains", "value": ".github/workflows/publish.yml"},
+        {"name": "knishio:linkage", "value": "static, bundled in the binary release packages only (KNISHIO_USE_KCORE=ON); not in the source package"}
+      ]
+    },
+    {
+      "type": "library",
+      "group": "nlohmann",
+      "name": "json",
+      "version": "3.11.3",
+      "licenses": [{"license": {"id": "MIT"}}],
+      "purl": "pkg:github/nlohmann/json@v3.11.3",
+      "hashes": [{"alg": "SHA-256", "content": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6"}],
+      "externalReferences": [{"type": "vcs", "url": "https://github.com/nlohmann/json"}],
+      "properties": [
+        {"name": "knishio:commit", "value": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03"},
+        {"name": "knishio:verify:file-sha256", "value": "src/third_party/nlohmann/json.hpp"},
+        {"name": "knishio:vendored-path", "value": "src/third_party/nlohmann/json.hpp"}
+      ]
+    },
+    {
+      "type": "library",
+      "group": "KeccakTeam",
+      "name": "Keccak-readable-and-compact",
+      "licenses": [{"license": {"id": "CC0-1.0"}}],
+      "hashes": [{"alg": "SHA-256", "content": "7a16630a781e422390f81e5e0f7fa62fca6ecf20220c72c52fd1e891464a861b"}],
+      "externalReferences": [{"type": "vcs", "url": "https://github.com/gvanas/KeccakCodePackage"}],
+      "properties": [
+        {"name": "knishio:verify:file-sha256", "value": "src/third_party/Keccak/Keccak-readable-and-compact.cpp"},
+        {"name": "knishio:vendored-path", "value": "src/third_party/Keccak/"}
+      ]
+    },
+    {"type": "library", "name": "libsodium", "scope": "required", "properties": [{"name": "knishio:linkage", "value": "system, dynamic; provided by the consumer"}]},
+    {"type": "library", "name": "libcurl", "scope": "required", "properties": [{"name": "knishio:linkage", "value": "system, dynamic; provided by the consumer"}]},
+    {"type": "library", "name": "OpenSSL", "scope": "required", "properties": [{"name": "knishio:linkage", "value": "system, dynamic; provided by the consumer"}]}
+  ]
+}

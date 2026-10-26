@@ -1,0 +1,81 @@
+# C++ SDK scheduled supply-chain audit — OSV advisories against a tree nobody pushed to.
+#
+# Why a SCHEDULE: an advisory is published against code that has NOT changed. That is the
+# 2026-07 → 2026-08 lesson — a repo sits green for weeks while a dependency it already ships
+# acquires a CVE, because nothing re-examines a tree with no commits. ci.yml answers "did this
+# change break anything"; this file answers "did the world change underneath us". Only the
+# second question has a clock.
+#
+# WHAT IS SCANNED: this repo has no package manager, so there is no lockfile for OSV to read.
+# Its scannable surface is the commit-pinned upstreams listed in .github/sbom-components.json
+# (mlkem-native, the external/mlkem-native gitlink, and the vendored nlohmann/json).
+# .github/scripts/sbom.sh assembles the CycloneDX SBOM, fails if that file has drifted from
+# the tree, and writes the pinned commits as an osv-scanner lockfile, which is what OSV scans
+# here. System libraries are consumer-provided and listed unversioned, so OSV has nothing to
+# match them against.
+#
+# WHY A SEPARATE FILE RATHER THAN `schedule:` ADDED TO ci.yml:
+# `on:` is workflow-level, not job-level. Adding a schedule trigger to ci.yml would fire every
+# job in it weekly — the build + self-test + clang-tidy gate and the kcore build included — to
+# reach the one job that matters, and the changelog job would run with no comparable base
+# commit (a schedule event has neither a PR base nor a `before`). A dedicated workflow runs
+# exactly the steps that answer the question.
+#
+# NOTE: scheduled workflows only fire from the DEFAULT BRANCH. This file has no effect until
+# it is merged there — a branch-only copy runs never, silently.
+name: Scheduled audit
+
+on:
+  schedule:
+    # Mondays 06:17 UTC. Deliberately off the hour: GitHub sheds scheduled runs when the
+    # top-of-hour queue saturates, and a weekly job that quietly does not run is worse than
+    # no job at all, because it reads as green.
+    - cron: '17 6 * * 1'
+  # Manual trigger, plus a deliberate-failure switch. A gate nobody has watched FAIL is an
+  # unproven gate: set selftest_fail to make a run exit 1 on purpose and confirm the failure
+  # is actually visible wherever these notifications land.
+  workflow_dispatch:
+    inputs:
+      selftest_fail:
+        description: 'Fail this run on purpose, to prove the alert path works. Audits nothing.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    name: SBOM (CycloneDX) + OSV scan
+    runs-on: ubuntu-latest
+    steps:
+      # `if: inputs.selftest_fail` reads the DECLARED BOOLEAN directly. Do not "fix" this to
+      # `== 'true'`: GitHub coerces mismatched types to number for loose equality, the string
+      # 'true' casts to NaN, and NaN equals nothing — so that form is always false and the
+      # probe would silently never fire. The input is used only inside this expression and is
+      # never interpolated into shell text.
+      - name: Selftest failure probe
+        if: inputs.selftest_fail
+        run: |
+          echo "::error::Selftest failure probe requested — failing this run deliberately."
+          exit 1
+
+      # No submodules: sbom.py reads the external/mlkem-native gitlink with `git ls-tree HEAD`,
+      # which needs only the tree object, not the submodule checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate SBOM
+        run: bash .github/scripts/sbom.sh
+
+      - name: Export SBOM paths
+        run: cat sbom-out/paths.env >> "$GITHUB_ENV"
+
+      - name: OSV scan (commit-pinned upstreams)
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36  # v2.7.0
+        with:
+          scan-args: |-
+            -L
+            osv-scanner:${{ env.OSV_COMMITS_FILE }}

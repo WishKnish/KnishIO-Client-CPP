@@ -312,3 +312,5 @@ build/
 /.cache/
 # LLVM installer; CI wgets it fresh from apt.llvm.org
 /llvm.sh
+# CycloneDX SBOM output (.github/scripts/sbom.sh)
+/sbom-out/

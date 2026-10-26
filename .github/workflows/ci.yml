@@ -193,3 +193,37 @@ jobs:
             exit 1
           fi
           echo "OK: CHANGELOG.md documents $NEW"
+
+  # CycloneDX SBOM + OSV. No package manager here: .github/scripts/sbom.sh assembles the SBOM
+  # from the committed .github/sbom-components.json and fails if that file has drifted from the
+  # tree (the mlkem-native gitlink; the vendored json.hpp and Keccak sha256s; the kcore sha256
+  # pins in publish.yml). OSV scans the commit-pinned upstreams (the only scannable surface;
+  # system libraries are listed unversioned). The SBOM is kept as the `sbom` artifact.
+  sbom:
+    name: SBOM (CycloneDX) + OSV scan
+    runs-on: ubuntu-latest
+    steps:
+      # No submodules: sbom.py reads the external/mlkem-native gitlink with `git ls-tree HEAD`,
+      # which needs only the tree object, not the submodule checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate SBOM
+        run: bash .github/scripts/sbom.sh
+
+      - name: Export SBOM paths
+        run: cat sbom-out/paths.env >> "$GITHUB_ENV"
+
+      - name: OSV scan (commit-pinned upstreams)
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36  # v2.7.0
+        with:
+          scan-args: |-
+            -L
+            osv-scanner:${{ env.OSV_COMMITS_FILE }}
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: sbom
+          path: sbom-out/*.cdx.json
+          if-no-files-found: error

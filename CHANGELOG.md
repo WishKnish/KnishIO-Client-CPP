@@ -16,6 +16,14 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+### Added
+
+- CI generates a CycloneDX SBOM from `.github/sbom-components.json`: the mlkem-native submodule, the
+  KnishIO-Crypto-Core release packages bundled into the binary tarballs, the vendored nlohmann/json 3.11.3 and
+  Keccak sources and the consumer-provided system libraries. `sbom.sh` checks the file against the submodule
+  gitlink, the vendored files' SHA-256 and the publish workflow's pins, and OSV scans the pinned upstream
+  commits on every push and weekly. Each GitHub Release attaches it as `knishio-client-cpp-<version>.cdx.json`.
+
 ### Changed
 
 - `charsetBaseConvert` (the base-16 to base-17 conversion behind `Atom::hashAtoms` molecular
