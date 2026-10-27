@@ -16,6 +16,8 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-10-27
+
 ### Added
 
 - CI generates a CycloneDX SBOM from `.github/sbom-components.json`: the mlkem-native submodule, the
@@ -540,7 +542,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.2.0...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.2.1...HEAD
+[2.2.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.2.1
 [2.2.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.2.0
 [2.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.1.0
 [2.0.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.0.0
