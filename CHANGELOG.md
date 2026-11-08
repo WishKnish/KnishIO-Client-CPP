@@ -16,6 +16,16 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+### Added
+
+- Test `kcore_parity_vectors` (`tests/kcore_parity_vectors.cpp`) reads the shared kcore parity
+  vectors (`tests/fixtures/kcore-parity-vectors.json`, vendored from the monorepo master): 16 full
+  signed molecules (metadata, value transfer, token creation, wallet creation) at OTS versions 1
+  and 2, with unique and with colliding `createdAt` values. Each must hash and pass `verifyOts`,
+  and re-signing it must reproduce `molecularHash` and every `otsFragment` byte for byte. It runs
+  in both the pure build and the `KNISHIO_USE_KCORE=ON` build (CI `gate` and `gate-kcore`); a
+  missing fixture fails the test.
+
 ## [2.2.1] — 2026-10-27
 
 ### Added

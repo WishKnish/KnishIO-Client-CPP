@@ -229,6 +229,38 @@ set_tests_properties(OtsV2Vectors PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
 )
 
+# kcore parity: the shared kcore parity vectors (16 full signed molecules), read from the vendored
+# copy in tests/fixtures/ (KNISHIO_KCORE_PARITY_VECTORS overrides the path). Each case must verify
+# and re-sign to the same molecularHash and otsFragments on the backend this build links, so the
+# test runs in both the pure and the KNISHIO_USE_KCORE=ON build. A missing fixture fails.
+add_executable(kcore_parity_vectors kcore_parity_vectors.cpp)
+target_link_libraries(kcore_parity_vectors
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(kcore_parity_vectors PRIVATE cxx_std_20)
+target_compile_definitions(kcore_parity_vectors PRIVATE
+    KNISHIO_KCORE_PARITY_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/kcore-parity-vectors.json"
+)
+if(KNISHIO_USE_KCORE)
+    # Lets the test ask kcore itself to answer at runtime (the SDK library hides its kcore copy).
+    target_link_libraries(kcore_parity_vectors PRIVATE KnishIO::kcore-static)
+    target_compile_definitions(kcore_parity_vectors PRIVATE KNISHIO_HAVE_KCORE=1)
+endif()
+set_target_properties(kcore_parity_vectors PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME kcore_parity_vectors
+    COMMAND kcore_parity_vectors
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(kcore_parity_vectors PROPERTIES
+    LABELS "crypto;signature;vectors;kcore"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:kcore_parity_vectors>
+)
+
 # Served-molecule verification (Molecule::verifyFromServerData) and the shared Version4 hash
 # vectors, read from the vendored copies in tests/fixtures/ (KNISHIO_SERVED_MOLECULES and
 # KNISHIO_VERSION4_VECTORS override the paths); a missing file exits 77 (skipped).
