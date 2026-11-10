@@ -26,6 +26,18 @@ substantiate a detail, the entry says so instead of guessing.
   in both the pure build and the `KNISHIO_USE_KCORE=ON` build (CI `gate` and `gate-kcore`); a
   missing fixture fails the test.
 
+### Security
+
+- The reply to a request the client sent in the `CipherHash` envelope is accepted only if it is an
+  envelope that decrypts for the client's wallet, or an errors-only reply (`data` absent, `null` or
+  `{}`, so the validator's `errors` stay visible). Plaintext `data`, an envelope that does not
+  decrypt and a 2xx body that is not JSON now throw `EncryptedTransportException`
+  (`CipherHash: plaintext reply to an encrypted request`, `CipherHash: reply could not be
+  decrypted`, `CipherHash: reply is not valid JSON`), which is not retried; until now such a reply
+  was returned as if the validator had sent it. The PHP and C SDKs already applied this rule. The
+  plaintext bootstrap operations (`__schema`, `ContinuId`, `AccessToken`, U-isotope
+  `ProposeMolecule`) are unaffected. `EncryptedReplyRule` is the regression test.
+
 ## [2.2.1] — 2026-10-27
 
 ### Added

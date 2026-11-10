@@ -5,7 +5,8 @@
  * The client has no transport seam, so the tests (tests/phaseb_molecules.cpp and the
  * self-test's create_token_units vectors) point a real KnishIOClient at this stub on 127.0.0.1
  * and read back the molecules it proposed. It answers ContinuId, Balance and ProposeMolecule
- * (always "accepted"); every other query gets {"data":null}. POSIX sockets only.
+ * (always "accepted"); every other query gets {"data":null}. setRawReply() overrides all of that
+ * with one fixed body (HTTP 200) for every request. POSIX sockets only.
  */
 #pragma once
 
@@ -20,6 +21,7 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -86,6 +88,9 @@ public:
         buffer_ = std::move(buffer);
     }
 
+    // When set, every request is answered with exactly this body (HTTP 200), whatever it asked.
+    void setRawReply(std::string body) { std::lock_guard<std::mutex> lock(mutex_); rawReply_ = std::move(body); }
+
     [[nodiscard]] std::vector<json> requests(const std::string& operation) const {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<json> out;
@@ -149,7 +154,9 @@ private:
             if (request.is_discarded()) request = json::object();
             requests_.push_back(request);
             const std::string query = request.value("query", "");
-            if (query.find("ContinuId") != std::string::npos) {
+            if (rawReply_.has_value()) {
+                reply = *rawReply_;
+            } else if (query.find("ContinuId") != std::string::npos) {
                 reply = json{{"data", {{"ContinuId", continuId_}}}}.dump();
             } else if (query.find("Balance") != std::string::npos) {
                 const json vars = request.value("variables", json::object());
@@ -180,6 +187,7 @@ private:
     json continuId_ = nullptr;
     json regular_ = nullptr;
     json buffer_ = nullptr;
+    std::optional<std::string> rawReply_;
     int proposals_ = 0;
 };
 

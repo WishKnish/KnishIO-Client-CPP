@@ -424,24 +424,42 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     response.body = responseBody;
     response.headers = responseHeaders;
 
-    // PQ-transport Phase E: decrypt the CipherHash response envelope back to the inner GraphQL
-    // response JSON (which replaces the body for normal parsing). The validator encrypts the
-    // response OBJECT, so decryptMyMessageML returns the raw inner JSON (no JSON-decode).
+    // PQ-transport Phase E: a reply to a request this client wrapped in the CipherHash envelope is
+    // accepted only as a decryptable envelope or as an errors-only reply (`data` absent, null or
+    // `{}`, so the validator's `errors` stay visible). Anything else fails closed: a plaintext
+    // `data` reply would let whoever sits between client and validator answer an encrypted request.
+    // The validator never sends one (every success is re-encrypted; a failure is `data: null` plus
+    // `errors`). Same rule as PHP Libraries/Cipher.php and the C SDK. The validator encrypts the
+    // response OBJECT, so decryptMyMessageML returns the raw inner GraphQL response JSON, which
+    // replaces the body for normal parsing. EncryptedTransportException, not GraphQLException:
+    // executeWithRetry rethrows it at once instead of retrying.
     if (encryptedRequest && pImpl_->cipherWallet) {
-        try {
-            nlohmann::json env = nlohmann::json::parse(response.body);
-            if (env.contains("data") && env["data"].is_object()
-                && env["data"].contains("CipherHash") && env["data"]["CipherHash"].is_object()
-                && env["data"]["CipherHash"].contains("hash")
-                && env["data"]["CipherHash"]["hash"].is_string()) {
-                std::string decrypted = pImpl_->cipherWallet->decryptMyMessageML(
-                    env["data"]["CipherHash"]["hash"].get<std::string>());
-                if (!decrypted.empty()) {
-                    response.body = decrypted;
-                }
+        const nlohmann::json reply = nlohmann::json::parse(response.body, nullptr, false);
+        if (reply.is_discarded()) {
+            // A non-2xx non-JSON body is an HTTP error; the normal handling below reports it.
+            if (response.statusCode >= 200 && response.statusCode < 300) {
+                throw EncryptedTransportException("CipherHash: reply is not valid JSON");
             }
-        } catch (const std::exception&) {
-            // Not a CipherHash envelope (e.g. a plaintext error response) — leave body unchanged.
+        } else if (reply.is_object() && reply.contains("data")) {
+            const nlohmann::json& data = reply["data"];
+            const bool enveloped = data.is_object() && data.contains("CipherHash")
+                && data["CipherHash"].is_object() && data["CipherHash"].contains("hash")
+                && data["CipherHash"]["hash"].is_string();
+            if (enveloped) {
+                std::string decrypted;
+                try {
+                    decrypted = pImpl_->cipherWallet->decryptMyMessageML(
+                        data["CipherHash"]["hash"].get<std::string>());
+                } catch (const std::exception&) {
+                    throw EncryptedTransportException("CipherHash: reply could not be decrypted");
+                }
+                if (decrypted.empty()) {
+                    throw EncryptedTransportException("CipherHash: reply could not be decrypted");
+                }
+                response.body = std::move(decrypted);
+            } else if (!data.is_null() && !(data.is_object() && data.empty())) {
+                throw EncryptedTransportException("CipherHash: plaintext reply to an encrypted request");
+            }
         }
     }
 

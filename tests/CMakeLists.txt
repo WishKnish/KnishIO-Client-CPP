@@ -114,6 +114,29 @@ set_tests_properties(EncryptedTransportFailClosed PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:encrypted_transport_fail_closed>
 )
 
+# PQ-transport (Phase E): the reply to a request the client wrapped in the CipherHash envelope is
+# accepted only as a decryptable envelope or an errors-only reply; plaintext data, an undecryptable
+# envelope and a non-JSON 200 body fail closed. Driven against the loopback stub validator.
+add_executable(encrypted_reply_rule encrypted_reply_rule.cpp)
+target_link_libraries(encrypted_reply_rule
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(encrypted_reply_rule PRIVATE cxx_std_20)
+set_target_properties(encrypted_reply_rule PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME EncryptedReplyRule
+    COMMAND encrypted_reply_rule
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(EncryptedReplyRule PROPERTIES
+    LABELS "pq-transport;security;unit"
+    TIMEOUT 60
+    REQUIRED_FILES $<TARGET_FILE:encrypted_reply_rule>
+)
+
 # Prove-the-gate: ML-KEM encapsulation must draw its message m from a fresh CSPRNG,
 # not the mlkem-native test RNG stub. Cross-process determinism = the bug.
 # See run_encaps_entropy_twice.cmake.

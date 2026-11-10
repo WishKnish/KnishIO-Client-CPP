@@ -233,10 +233,15 @@ private:
 };
 
 /**
- * Thrown when an encryption-enabled client is asked to send a non-bypassed operation but the
- * ML-KEM transport keys are missing (PQ-transport Phase E fail-closed). Distinct from
- * GraphQLException so the retry loop can surface it immediately: no amount of retrying supplies
- * a wallet or a validator public key, and the request never reaches the network.
+ * Thrown when the encrypted transport (PQ-transport Phase E) cannot be honoured, so the client
+ * fails closed instead of downgrading to plaintext:
+ *  - an encryption-enabled client is asked to send a non-bypassed operation but the ML-KEM
+ *    transport keys are missing (the request never reaches the network);
+ *  - the reply to a request this client wrapped in the CipherHash envelope breaks the encrypted
+ *    transport: a 2xx body that is not JSON, an envelope that does not decrypt for this wallet,
+ *    or plaintext `data` (only an errors-only reply with `data` absent, null or `{}` passes).
+ * Distinct from GraphQLException so the retry loop can surface it immediately: no amount of
+ * retrying supplies a wallet or a validator public key, or makes a bad reply trustworthy.
  */
 class EncryptedTransportException : public GraphQLException {
 public:
