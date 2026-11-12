@@ -10,6 +10,9 @@ name: CI
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   # Catch version drift at commit time, not at release time. The publish workflow already
   # refuses a tag that disagrees with the manifest, but that only fires on a tag push, so
@@ -47,10 +50,14 @@ jobs:
       # is reproducible — a different version could add/drop bugprone/performance checks.
       - name: Install LLVM 22 (clang + clang-tidy)
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y clang-tidy-22
+          set -euo pipefail
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.asc"
+          echo "8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d  $RUNNER_TEMP/llvm.asc" | sha256sum -c -
+          sudo install -D -m 0644 "$RUNNER_TEMP/llvm.asc" /etc/apt/keyrings/apt.llvm.org.asc
+          CODENAME="$(lsb_release -cs)"
+          echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] https://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update
+          sudo apt-get install -y clang-22 clang-tidy-22
 
       # Build with clang-22 → the compile DB clang-tidy reads is clang-clean (no g++-only
       # flags). Default build type (no -march=native); EXPORT_COMPILE_COMMANDS is on by default.
@@ -117,9 +124,14 @@ jobs:
 
       - name: Install LLVM 22 (clang)
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
+          set -euo pipefail
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.asc"
+          echo "8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d  $RUNNER_TEMP/llvm.asc" | sha256sum -c -
+          sudo install -D -m 0644 "$RUNNER_TEMP/llvm.asc" /etc/apt/keyrings/apt.llvm.org.asc
+          CODENAME="$(lsb_release -cs)"
+          echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] https://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update
+          sudo apt-get install -y clang-22 clang-tidy-22
 
       - name: Fetch kcore 0.2.0 (linux-x64-gnu, sha256-pinned)
         run: |

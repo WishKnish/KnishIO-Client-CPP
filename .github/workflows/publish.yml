@@ -48,7 +48,7 @@ on:
         type: string
 
 permissions:
-  contents: write   # create the GitHub Release; no registry auth needed
+  contents: read
 
 jobs:
   version-gate:
@@ -120,10 +120,14 @@ jobs:
       - name: Install LLVM 22 (clang + clang-tidy, Linux only)
         if: runner.os == 'Linux'
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y clang-tidy-22
+          set -euo pipefail
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.asc"
+          echo "8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d  $RUNNER_TEMP/llvm.asc" | sha256sum -c -
+          sudo install -D -m 0644 "$RUNNER_TEMP/llvm.asc" /etc/apt/keyrings/apt.llvm.org.asc
+          CODENAME="$(lsb_release -cs)"
+          echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] https://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update
+          sudo apt-get install -y clang-22 clang-tidy-22
 
       # The prebuilt packages are built with kcore (KNISHIO_USE_KCORE=ON) and bundle it, so a
       # consumer's find_package(KnishIOClientCPP) resolves kcore from the same prefix. The kcore
@@ -322,6 +326,8 @@ jobs:
     needs: [version-gate, package, source, sbom]
     if: github.event_name == 'push'   # dispatch = dry run; never creates a Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release; no registry auth needed
     steps:
       # Checkout leads, before download-artifact: `actions/checkout` defaults to clean: true
       # (`git clean -ffdx && git reset --hard`), so running it second would delete the
@@ -366,7 +372,7 @@ jobs:
           cat /tmp/release-notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3
         with:
           # `generate_release_notes` stays OFF, deliberately — do not restore it. The action
           # appends the WHOLE generated block (`<body>\n\n<notes>`), which would put the
