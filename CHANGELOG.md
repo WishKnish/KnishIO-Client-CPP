@@ -37,6 +37,8 @@ substantiate a detail, the entry says so instead of guessing.
   them.
 - `KnishIOClient::generateBatchId(molecularHash, index)` replaces
   `generateBatchId(const Molecule&)`.
+- `KnishIOClient::createMolecule` returns `std::unique_ptr<Molecule>` and copies the
+  `const Wallet*` it is given (it returned a raw pointer and deleted the caller's wallet).
 
 ### Fixed
 
@@ -60,6 +62,14 @@ substantiate a detail, the entry says so instead of guessing.
   2^53 − 1, no longer throws `std::out_of_range`; `generateBatchId` is SHAKE256 of the molecular
   hash and index (it was BLAKE2b over the clock). `SignedAtomParity` pins digests printed by the
   JS SDK for the same inputs.
+- `setSecret` accepts any non-empty secret (it rejected non-hex secrets such as passphrases);
+  `createMolecule` gives the molecule its source and remainder wallets and bundle, so it signs at
+  the source wallet's OTS version (it signed at version 1); `queryWallets` applies its `token`
+  filter; `Wallet::decryptMyMessage` decrypts (the NaCl key pair was stored public/private
+  swapped and then overwritten by the ML-KEM key); `ResponseRequestAuthorization::getPublicKey`
+  reads the validator key from payload `key`; `QueryBalance::createResponse` reads `Balance` under
+  `data` and `ResponseBalance` accepts null fields; the HTTP header list is freed after each
+  request (it leaked on every request). `ClientOperations` is the regression test.
 
 ### Security
 

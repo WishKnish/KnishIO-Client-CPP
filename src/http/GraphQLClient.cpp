@@ -302,7 +302,7 @@ size_t GraphQLClient::headerCallback(char* buffer, size_t size, size_t nitems, v
     return totalSize;
 }
 
-void GraphQLClient::setupRequestHeaders(CURL* curl, const Request& request) {
+curl_slist* GraphQLClient::setupRequestHeaders(CURL* curl, const Request& request) {
     struct curl_slist* headers = nullptr;
     
     // Add content type
@@ -325,6 +325,7 @@ void GraphQLClient::setupRequestHeaders(CURL* curl, const Request& request) {
     }
     
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    return headers;
 }
 
 GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
@@ -405,8 +406,13 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, pImpl_->verifySSL ? 1L : 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, pImpl_->verifySSL ? 2L : 0L);
     
-    // Set headers
-    setupRequestHeaders(curl, request);
+    // Set headers. The list lives until the request is done; the pooled handle then forgets it
+    // and the list is freed (it leaked on every request before).
+    auto headersCleanup = [curl](curl_slist* list) {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
+        curl_slist_free_all(list);
+    };
+    std::unique_ptr<curl_slist, decltype(headersCleanup)> headers(setupRequestHeaders(curl, request), headersCleanup);
     
     // Perform request
     CURLcode res = curl_easy_perform(curl);

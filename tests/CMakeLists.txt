@@ -479,6 +479,29 @@ set_tests_properties(SignedAtomParity PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:signed_atom_parity>
 )
 
+# Client, wallet and response methods: a passphrase secret, createMolecule's wallets and OTS
+# version, queryWallets' token filter, decryptMyMessage, the authorization response's validator
+# key and QueryBalance's response. Loopback stub validator; no network.
+add_executable(client_operations client_operations.cpp)
+target_link_libraries(client_operations
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(client_operations PRIVATE cxx_std_20)
+set_target_properties(client_operations PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME ClientOperations
+    COMMAND client_operations
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(ClientOperations PROPERTIES
+    LABELS "client;unit"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:client_operations>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage

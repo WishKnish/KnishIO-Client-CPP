@@ -207,7 +207,8 @@ private:
     
     void initializeCurl();
     void cleanupCurl();
-    void setupRequestHeaders(CURL* curl, const Request& request);
+    // Builds and installs the request headers; the caller owns the returned list (curl_slist_free_all).
+    [[nodiscard]] curl_slist* setupRequestHeaders(CURL* curl, const Request& request);
     [[nodiscard]] Response parseCurlResponse(CURL* curl, const std::string& responseBody,
                                             const std::unordered_map<std::string, std::string>& headers);
 };

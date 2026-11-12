@@ -47,17 +47,21 @@ std::optional<ResponseBalance::Balance> ResponseBalance::getBalance() const {
 }
 
 void ResponseBalance::parseData() {
-    if (data.contains("Balance") && !data["Balance"].is_null()) {
+    if (data.contains("Balance") && data["Balance"].is_object()) {
         Balance b;
-        auto balanceData = data["Balance"];
-        
-        if (balanceData.contains("address")) b.address = balanceData["address"];
-        if (balanceData.contains("bundleHash")) b.bundleHash = balanceData["bundleHash"];
-        if (balanceData.contains("tokenSlug")) b.tokenSlug = balanceData["tokenSlug"];
-        if (balanceData.contains("amount")) b.amount = balanceData["amount"];
-        if (balanceData.contains("position")) b.position = balanceData["position"];
-        if (balanceData.contains("batchId")) b.batchId = balanceData["batchId"];
-        
+        const auto& balanceData = data["Balance"];
+        const auto text = [&balanceData](const char* key, std::string& out) {
+            if (balanceData.contains(key) && balanceData[key].is_string()) {
+                out = balanceData[key].get<std::string>();
+            }
+        };
+
+        text("address", b.address);
+        text("bundleHash", b.bundleHash);
+        text("tokenSlug", b.tokenSlug);
+        text("amount", b.amount);
+        text("position", b.position);
+        text("batchId", b.batchId);
         // The validator returns `characters` as a single String (e.g. "BASE64"); tolerate an
         // array shape too for older producers.
         if (balanceData.contains("characters")) {
@@ -191,10 +195,11 @@ std::string ResponseRequestAuthorization::getAuthToken() const {
     return "";
 }
 
+// The validator's ML-KEM public key is payload "key" (JS ResponseRequestAuthorization.pubKey).
 std::string ResponseRequestAuthorization::getPublicKey() const {
     const auto payload = parseProposePayload(data);
-    if (payload.contains("pubkey") && payload["pubkey"].is_string()) {
-        return payload["pubkey"].get<std::string>();
+    if (payload.contains("key") && payload["key"].is_string()) {
+        return payload["key"].get<std::string>();
     }
     return "";
 }

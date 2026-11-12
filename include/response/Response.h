@@ -227,8 +227,8 @@ public:
     [[nodiscard]] std::string getAuthToken() const;
     
     /**
-     * Get the public key
-     * @return Public key
+     * Get the validator's ML-KEM public key (payload "key")
+     * @return Public key (base64) or empty string
      */
     [[nodiscard]] std::string getPublicKey() const;
     

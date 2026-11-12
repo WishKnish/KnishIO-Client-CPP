@@ -24,15 +24,11 @@ nlohmann::json QueryBalance::execute(const nlohmann::json& variables) {
 }
 
 std::unique_ptr<response::Response> QueryBalance::createResponse(const nlohmann::json& data) {
-    // Create a ResponseBalance and populate it
+    // The GraphQL body is { "data": { "Balance": {...} } }; ResponseBalance reads the inner object
     auto response = std::make_unique<response::ResponseBalance>();
-    response->setData(data);
-    
-    // Parse the balance data if present
-    if (data.contains("data") && data["data"].contains("Balance")) {
-        response->parseData();
-    }
-    
+    const bool wrapped = data.is_object() && data.contains("data") && data["data"].is_object();
+    response->setData(wrapped ? data["data"] : data);
+    response->parseData();
     return response;
 }
 

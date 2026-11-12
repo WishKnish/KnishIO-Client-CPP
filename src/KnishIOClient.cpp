@@ -163,13 +163,9 @@ void KnishIOClient::setSecret(const std::string& secret) {
     if (secret.empty()) {
         throw KnishIOException("Secret cannot be empty");
     }
-    
-    // Validate hexadecimal format
-    if (!std::all_of(secret.begin(), secret.end(), 
-        [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; })) {
-        throw KnishIOException("Secret must be a hexadecimal string");
-    }
-    
+
+    // Any non-empty string is a secret (JS setSecret): a non-hex secret, e.g. a passphrase, is
+    // hashed by Wallet::generateWalletKey before key derivation.
     pImpl_->secret = secret;
     
     // Generate wallet from secret
@@ -239,9 +235,8 @@ KnishIOClient::queryWallets(const std::optional<std::string>& bundle,
         const std::string b = bundle.value_or(getBundle());
         log("INFO", "Querying wallet list for bundle: " + b);
 
-        // Validator: wallets(bundleHash, limit, offset) -> [Wallet]. No server-side token filter;
-        // callers filter the returned list by token if needed.
-        (void)token;
+        // Validator: wallets(bundleHash, limit, offset) -> [Wallet]. No server-side token filter,
+        // so a token filter is applied to the returned list here.
         static const std::string WALLETS_QUERY =
             "query Wallets($bundleHash: String!, $limit: Int, $offset: Int) {"
             " wallets(bundleHash: $bundleHash, limit: $limit, offset: $offset) {"
@@ -257,7 +252,18 @@ KnishIOClient::queryWallets(const std::optional<std::string>& bundle,
             auto httpResp = pImpl_->httpClient->query(WALLETS_QUERY, variables).get();
             if (httpResp.isSuccess()) {
                 nlohmann::json body = nlohmann::json::parse(httpResp.body);
-                result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
+                nlohmann::json data = body.contains("data") && !body["data"].is_null() ? body["data"] : body;
+                if (token.has_value() && data.is_object() && data.contains("wallets") && data["wallets"].is_array()) {
+                    nlohmann::json kept = nlohmann::json::array();
+                    for (const auto& wallet : data["wallets"]) {
+                        const auto slug = wallet.contains("tokenSlug") ? wallet["tokenSlug"] : wallet.value("token", nlohmann::json());
+                        if (slug.is_string() && slug.get<std::string>() == token.value()) {
+                            kept.push_back(wallet);
+                        }
+                    }
+                    data["wallets"] = std::move(kept);
+                }
+                result->setData(data);
                 result->parseData();
             } else {
                 result->setError("Wallets query failed (HTTP " + std::to_string(httpResp.statusCode) + ")");
@@ -300,11 +306,13 @@ KnishIOClient::queryContinuId(const std::string& bundle) {
 }
 
 // Molecule operations
-Molecule* KnishIOClient::createMolecule(
+// JS createMolecule: the source is the caller's wallet or the bundle's ContinuID USER wallet; the
+// remainder is a fresh USER wallet at no lower an OTS version than the client's.
+std::unique_ptr<Molecule> KnishIOClient::createMolecule(
     const std::optional<std::string>& secret,
-    Wallet* sourceWallet,
+    const Wallet* sourceWallet,
     const std::optional<std::string>& cellSlug) {
-    
+
     // Use provided secret or client secret
     std::string moleculeSecret;
     if (secret.has_value()) {
@@ -315,22 +323,25 @@ Molecule* KnishIOClient::createMolecule(
     } else {
         throw KnishIOException("No secret available for molecule creation");
     }
-    
-    // Use provided cell slug or client cell slug
-    std::optional<std::string> moleculeCellSlug = cellSlug;
-    if (!moleculeCellSlug.has_value()) {
-        moleculeCellSlug = pImpl_->config.cellSlug;
+    const int mlKem = pImpl_->config.mlKemParameterSet;
+
+    std::shared_ptr<Wallet> source;
+    if (sourceWallet != nullptr) {
+        source = std::make_shared<Wallet>(*sourceWallet);
+    } else {
+        if (!hasSecret()) {
+            throw KnishIOException("No client secret to resolve the ContinuID source wallet");
+        }
+        source = std::make_shared<Wallet>(continuIdSourceWallet(getBundle(), mlKem));
     }
-    
-    // Create molecule and return raw pointer
-    // Caller is responsible for managing the memory
-    Molecule* molecule = new Molecule(moleculeCellSlug.value_or(""));
-    
-    // Clean up source wallet if provided (we took ownership)
-    if (sourceWallet) {
-        delete sourceWallet;
-    }
-    
+    auto remainder = std::make_shared<Wallet>(moleculeSecret, "USER", "", 64, mlKem, successorOtsVersion(source->ots_version));
+    remainder->batchId = source->batchId;
+
+    auto molecule = std::make_unique<Molecule>(cellSlug.value_or(pImpl_->config.cellSlug.value_or("")));
+    molecule->sourceWallet = source;
+    molecule->remainderWallet = remainder;
+    molecule->bundle = Wallet::generateBundleHash(moleculeSecret);
+
     log("DEBUG", "Molecule created");
     return molecule;
 }

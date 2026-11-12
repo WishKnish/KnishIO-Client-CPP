@@ -43,7 +43,7 @@ Wallet::Wallet(const std::string &secret, const std::string &token, const std::s
 	this->address = Wallet::generateWalletAddress(this->key);
 	this->bundle = generateBundleHash(secret);
 
-	generatePublicAndPrivateKeys(this->privkey, this->pubkey);
+	generatePublicAndPrivateKeys(this->pubkey, this->privkey);   // (publicKey, privateKey) order
 	
 	// Initialize ML-KEM keys
 	initializeMLKEM(this->mlkem_parameter_set);
@@ -66,7 +66,7 @@ Wallet::~Wallet()
 
 bool Wallet::generateMyPublicAndPrivateKeys()
 {
-	return generatePublicAndPrivateKeys(this->privkey, this->pubkey);
+	return generatePublicAndPrivateKeys(this->pubkey, this->privkey);
 }
 
 /**
@@ -362,9 +362,8 @@ void Wallet::initializeMLKEM(int parameterSet) {
     MlKemIdentity identity = deriveMlKemKeypair(mlkem_parameter_set);
     mlkem_public_key = identity.publicKey;
     mlkem_private_key = identity.privateKey;
-
-    // Update pubkey to ML-KEM public key (raw bytes)
-    pubkey = mlkem_public_key;
+    // pubkey/privkey stay the classical NaCl box pair decryptMyMessage uses; the ML-KEM key is
+    // mlkem_public_key (overwriting pubkey with it broke decryptMyMessage).
 #else
     (void) parameterSet;
 #endif

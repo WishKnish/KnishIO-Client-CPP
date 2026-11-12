@@ -194,16 +194,20 @@ public:
     // Molecule operations
     
     /**
-     * Create a new molecule for transaction composition
+     * Create a new molecule for transaction composition (mirrors JS createMolecule)
+     *
+     * The molecule's source wallet is a copy of @p sourceWallet, or the USER wallet at the bundle's
+     * live ContinuID position (queried; a fresh one at the client's OTS version for a bundle with
+     * none). Its remainder is a fresh USER wallet at no lower an OTS version than the client's, and
+     * its bundle is the secret's. The molecule signs at the source wallet's OTS version.
      * @param secret Optional secret (uses client secret if not provided)
-     * @param sourceWallet Optional source wallet (takes ownership if provided)
-     * @param cellSlug Optional cell slug
-     * @return The created molecule (caller takes ownership)
-     * @note The returned pointer must be deleted by the caller or wrapped in a smart pointer
+     * @param sourceWallet Optional source wallet (copied; the caller keeps ownership)
+     * @param cellSlug Optional cell slug (the client's when not provided)
+     * @return The created molecule
      */
-    [[nodiscard]] KnishIO::Molecule* createMolecule(
+    [[nodiscard]] std::unique_ptr<KnishIO::Molecule> createMolecule(
         const std::optional<std::string>& secret = std::nullopt,
-        KnishIO::Wallet* sourceWallet = nullptr,
+        const KnishIO::Wallet* sourceWallet = nullptr,
         const std::optional<std::string>& cellSlug = std::nullopt);
     
     /**
