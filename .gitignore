@@ -301,7 +301,6 @@ build/
 ### Local throwaway diagnostics + scratch at repo root (not for commit)
 /test_*
 /diagnose_*
-/external/
 /shared-test-results/
 
 # macOS
@@ -310,7 +309,7 @@ build/
 # Local editor / toolchain cruft (regenerated or downloaded, never committed)
 # clangd index cache
 /.cache/
-# LLVM installer; CI wgets it fresh from apt.llvm.org
+# LLVM installer script (local only; CI installs LLVM 22 from apt.llvm.org with a pinned signing key)
 /llvm.sh
 # CycloneDX SBOM output (.github/scripts/sbom.sh)
 /sbom-out/

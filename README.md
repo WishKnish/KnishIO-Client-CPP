@@ -26,18 +26,18 @@ Ensure you have the following dependencies installed:
 
 #### macOS (Homebrew)
 ```bash
-brew install cmake libsodium curl
+brew install cmake pkg-config libsodium openssl@3 curl
 ```
 
 #### Ubuntu/Debian
 ```bash
-sudo apt-get install cmake libsodium-dev libcurl4-openssl-dev build-essential
+sudo apt-get install cmake pkg-config build-essential libsodium-dev libssl-dev libcurl4-openssl-dev
 ```
 
 #### Windows (MSVC)
 - Install Visual Studio 2019 or later
 - Install vcpkg for dependency management
-- Install dependencies: `vcpkg install libsodium curl`
+- Install dependencies: `vcpkg install libsodium openssl curl`
 
 ### System dependencies
 
@@ -57,29 +57,28 @@ The ML-KEM (FIPS 203) implementation, providing both ML-KEM-768 and ML-KEM-1024,
 
 ### Build Instructions
 
-1. Clone and build the SDK:
+1. Clone (with the `external/mlkem-native` submodule) and build the SDK:
    ```bash
-   git clone https://github.com/WishKnish/KnishIO-Client-CPP.git
+   git clone --recursive https://github.com/WishKnish/KnishIO-Client-CPP.git
    cd KnishIO-Client-CPP
-   mkdir build && cd build
-   cmake ..
-   cmake --build . --parallel 4
+   cmake -S . -B build
+   cmake --build build --parallel 4
    ```
 
 2. Run tests:
    ```bash
-   ctest
+   ctest --test-dir build --output-on-failure
    ```
 
-3. Build examples (optional):
+3. Build examples (on by default; turn off with `-DKNISHIO_BUILD_EXAMPLES=OFF`):
    ```bash
-   cmake -DKNISHIO_BUILD_EXAMPLES=ON ..
-   cmake --build .
+   cmake -S . -B build -DKNISHIO_BUILD_EXAMPLES=ON
+   cmake --build build
    ```
 
-4. Install system-wide (optional):
+4. Install (optional):
    ```bash
-   sudo make install
+   sudo cmake --install build
    ```
 
 5. Use the KnishIO Crypto Core (optional). With `-DKNISHIO_USE_KCORE=ON` the SDK links
@@ -89,7 +88,7 @@ The ML-KEM (FIPS 203) implementation, providing both ML-KEM-768 and ML-KEM-1024,
    `kcore: KnishIOCryptoCore 0.2.0`. Inputs kcore does not accept (anything
    but lowercase hex of the exact length) run the SDK's own code, so results are identical.
    ```bash
-   cmake -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=/path/to/knishio-crypto-core-0.2.0-linux-arm64-gnu ..
+   cmake -S . -B build -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=/path/to/knishio-crypto-core-0.2.0-linux-arm64-gnu
    ```
 
    The prebuilt `knishio-client-cpp-<version>-<platform>.tar.gz` packages on the GitHub Releases
@@ -99,434 +98,186 @@ The ML-KEM (FIPS 203) implementation, providing both ML-KEM-768 and ML-KEM-1024,
    resolves kcore without a separate download. Source builds take
    `-DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=<kcore package>`; OFF is still the default.
 
-After installation, include the SDK in your project:
+After installation, link `KnishIO::ClientCPP` (or `KnishIO::ClientCPPStatic`) with
+`find_package(KnishIOClientCPP)`, or compile with `-I<prefix>/include -I<prefix>/include/knishio`,
+and include the SDK headers:
 
 ```cpp
-#include <knishio/KnishIOClient.h>
-#include <knishio/Molecule.h>
-#include <knishio/Wallet.h>
-#include <knishio/Atom.h>
+#include <knishio/KnishIOClient.h>       // knishio::KnishIOClient
+#include <knishio/Molecule.h>            // KnishIO::Molecule
+#include <knishio/Wallet.h>              // KnishIO::Wallet
+#include <knishio/Atom.h>                // KnishIO::Atom
+#include <knishio/response/Response.h>   // knishio::response::Response*
 ```
+
+The client lives in namespace `knishio`; the ledger types (`Atom`, `Molecule`, `Wallet`) live in
+namespace `KnishIO`.
 
 ## Basic Usage
 
-The purpose of the Knish.IO SDK is to expose various ledger functions to new or existing applications.
+There are two ways to use the SDK:
 
-There are two ways to take advantage of these functions:
+1. The easy way: the `knishio::KnishIOClient` wrapper, which builds, signs, checks and submits
+   molecules for each operation.
+2. The granular way: build `KnishIO::Molecule` instances yourself and submit them with
+   `KnishIOClient::proposeMolecule`.
 
-1. The easy way: use the `KnishIOClient` wrapper class with builder pattern
-
-2. The granular way: build `Atom` and `Molecule` instances and broadcast GraphQL messages yourself
-
-This document will explain both ways.
+Every client operation is asynchronous and returns a `std::future`; call `.get()` for the
+response.
 
 ## The Easy Way: KnishIOClient Wrapper
 
-1. Include the wrapper class in your application code:
-   ```cpp
-   #include <knishio/KnishIOClient.h>
-   ```
-
-2. Instantiate the client with your node URI using the builder pattern:
+1. Build a client for your node:
    ```cpp
    auto client = knishio::KnishIOClient::Builder()
-       .uris({"https://api.knishio.dev", "https://backup.knishio.dev"})
+       .uris({"https://node.example/graphql"})
        .cellSlug("my-cell-slug")
        .enableLogging(true)
        .build();
    ```
 
-3. Set your secret for authentication:
+   Other builder options: `mlKemParameterSet(1024 | 768)`, `otsVersion(2 | 1)`,
+   `enableEncryption()`, `insecureTls()`, `timeout(...)`, `maxRetries(...)`.
+
+2. Authenticate with your secret:
    ```cpp
-   // Generate a secret
-   std::string secret = knishio::KnishIOClient::generateSecret(2048);
-
-   // Set the secret for the client
-   client->setSecret(secret);
-
-   // Note: C++ SDK uses stored secret for cryptographic operations
-   // This is equivalent to the JavaScript SDK's await client.requestAuthToken()
+   const std::string secret = knishio::KnishIOClient::generateSecret();   // 2048 random hex characters
+   auto auth = client->requestAuthToken(secret).get();
+   if (!auth->isAuthorized()) {
+       std::cerr << "authorization failed" << std::endl;
+   }
    ```
 
-   (**Note:** The `secret` parameter can be a salted combination of username + password, a biometric hash, an existing user identifier from an external authentication process, for example)
+   The secret can be any string: a random hex secret, a hash of login + password + salt, a
+   biometric hash, an identifier from another authentication process. `generateSecret(seed)`
+   derives a 2048-character secret from a seed deterministically.
 
-4. Begin using `client` to trigger commands described below...
+3. Use `client` for the operations below.
 
 ### KnishIOClient Methods
 
-- Query metadata for a **Wallet Bundle**. Omit the `bundleHash` parameter to query your own Wallet Bundle:
+- Query the balance of a token in your bundle (or another bundle):
   ```cpp
-  auto response = client->queryBundle(
-      "c47e20f99df190e418f0cc5ddfa2791e9ccc4eb297cfa21bd317dc0f98313b1d"
-  );
-
-  if (response.success()) {
-      std::cout << response.data() << std::endl; // Raw Metadata
+  auto balance = client->queryBalance("CRZY").get();
+  if (balance->getBalance()) {
+      std::cout << balance->getBalance()->amount << std::endl;
   }
   ```
 
-- Query metadata for a **Meta Asset**:
-
+- Query the wallets of a bundle, optionally for one token:
   ```cpp
-  auto result = client->queryMeta(
-      "Vehicle",      // metaType
-      "CAR123",       // metaId
-      "LicensePlate", // key
-      "1H17P",        // value
-      true            // latest
-  );
-
-  std::cout << result << std::endl; // Raw Metadata
-  ```
-
-- Writing new metadata for a **Meta Asset**:
-
-  ```cpp
-  std::map<std::string, std::string> metadata = {
-      {"type", "fire"},
-      {"weaknesses", "rock,water,electric"},
-      {"immunities", "ground"},
-      {"hp", "78"},
-      {"attack", "84"}
-  };
-
-  auto response = client->createMeta(
-      "Pokemon",      // metaType
-      "Charizard",    // metaId
-      metadata
-  );
-
-  if (response.success()) {
-      std::cout << "Metadata created successfully!" << std::endl;
-  }
-
-  std::cout << response.data() << std::endl; // Raw response
-  ```
-
-- Query Wallets associated with a Wallet Bundle:
-
-  ```cpp
-  auto wallets = client->queryWallets(
-      "c47e20f99df190e418f0cc5ddfa2791e9ccc4eb297cfa21bd317dc0f98313b1d", // bundleHash
-      "FOO",  // token (optional)
-      true    // unspent
-  );
-
-  std::cout << wallets << std::endl; // Raw response
-  ```
-
-- Declaring new **Wallets**:
-
-  (**Note:** If Tokens are sent to undeclared Wallets, **Shadow Wallets** will be used (placeholder
-  Wallets that can receive, but cannot send) to store tokens until they are claimed.)
-
-  ```cpp
-  auto response = client->createWallet("FOO"); // Token Slug for the wallet we are declaring
-
-  if (response.success()) {
-      std::cout << "Wallet created successfully!" << std::endl;
-  }
-
-  std::cout << response.data() << std::endl; // Raw response
-  ```
-
-- Attaching **Metadata** to any (metaType, metaId):
-
-  ```cpp
-  auto response = client->createMeta("EdgeBench", "run-1", {{"sample", "1"}}).get();
-
-  if (response && response->isAccepted()) {
-      std::cout << "Meta accepted" << std::endl;
+  auto wallets = client->queryWallets(std::nullopt, std::string("CRZY")).get();
+  for (const auto& wallet : wallets->getWallets()) {
+      std::cout << wallet.token << " " << wallet.balance << std::endl;
   }
   ```
 
-- Issuing new **Tokens**:
-
+- Declare a new wallet (tokens sent to an undeclared wallet land in a shadow wallet, which can
+  receive but not send until it is claimed with `claimShadowWallet(token, batchId)`):
   ```cpp
-  std::map<std::string, std::string> tokenMeta = {
-      {"name", "CrazyCoin"},      // Public name for the token
-      {"fungibility", "fungible"}, // Fungibility style
-      {"supply", "limited"},       // Supply style
-      {"decimals", "2"}            // Decimal places
-  };
-
-  auto response = client->createToken(
-      "CRZY",        // Token slug (ticker symbol)
-      100000000,     // Initial amount to issue
-      tokenMeta,
-      {},            // units (optional, for stackable tokens)
-      std::nullopt   // batchId (optional, for stackable tokens)
-  );
-
-  if (response.success()) {
-      std::cout << "Token created successfully!" << std::endl;
-  }
-
-  std::cout << response.data() << std::endl; // Raw response
+  auto created = client->createWallet("CRZY").get();
+  std::cout << (created->isAccepted() ? "accepted" : created->getRejectionReason()) << std::endl;
   ```
 
-- Transferring **Tokens** to other users:
-
+- Attach metadata to any (metaType, metaId):
   ```cpp
-  auto response = client->transferToken(
-      "7bf38257401eb3b0f20cabf5e6cf3f14c76760386473b220d95fa1c38642b61d", // Recipient's bundle hash
-      "CRZY",    // Token slug
-      100,       // Amount
-      {},        // units (optional, for stackable tokens)
-      std::nullopt // batchId (optional, for stackable tokens)
-  );
-
-  if (response.success()) {
-      std::cout << "Token transferred successfully!" << std::endl;
-  }
-
-  std::cout << response.data() << std::endl; // Raw response
+  auto meta = client->createMeta("Pokemon", "Charizard", {{"type", "fire"}, {"hp", "78"}}).get();
+  std::cout << (meta->isAccepted() ? "accepted" : meta->getRejectionReason()) << std::endl;
   ```
 
-- Creating a new **Rule**:
-
+- Issue a new token. The meta is hashed in the order given:
   ```cpp
-  std::vector<RuleDefinition> rule = {
-      // Rule definition
-  };
+  auto token = client->createToken(
+      "CRZY",                                   // token slug
+      100000000,                                // initial supply
+      {{"name", "CrazyCoin"}, {"fungibility", "fungible"}, {"supply", "limited"}, {"decimals", "0"}}
+  ).get();
+  std::cout << (token->isCreated() ? "created" : "rejected") << std::endl;
 
-  auto response = client->createRule(
-      "MyMetaType",  // metaType
-      "MyMetaId",    // metaId
-      rule,
-      std::nullopt   // policy (optional)
-  );
-
-  if (response.success()) {
-      std::cout << "Rule created successfully!" << std::endl;
-  }
-
-  std::cout << response.data() << std::endl; // Raw response
+  // A stackable token: the units are the supply; batchId is optional (a fresh one when empty)
+  auto stackable = client->createToken("STAK", 0, {{"fungibility", "stackable"}}, "", {"unit-1", "unit-2"}).get();
   ```
 
-- Querying **Atoms**:
-
+- Transfer tokens to another bundle (a batch id makes the recipient a claimable shadow wallet):
   ```cpp
-  auto response = client->queryAtom(
-      std::make_optional("molecular_hash_here"),
-      std::make_optional("bundle_hash_here"),
-      std::make_optional(Isotope::V),
-      std::make_optional("CRZY"),
-      true,  // latest
-      15,    // limit
-      1      // offset
-  );
-
-  std::cout << response.data() << std::endl; // Raw response
+  auto sent = client->transferToken(
+      "7bf38257401eb3b0f20cabf5e6cf3f14c76760386473b220d95fa1c38642b61d",   // recipient bundle hash
+      "CRZY",                                                                // token slug
+      100,                                                                   // amount
+      knishio::KnishIOClient::generateSecret(64)                             // batch id
+  ).get();
+  std::cout << (sent->isAccepted() ? "accepted" : sent->getRejectionReason()) << std::endl;
   ```
 
-- Working with **Buffer Tokens**:
+  `transferTokens(token, recipients)` funds several recipients in one molecule;
+  `burnToken(token, amount)` destroys tokens; `replenishToken(token, amount)` mints more supply of a
+  replenishable token; `fuseToken(bundleHash, token, newUnitId, unitIds)` fuses stackable units.
 
+- Buffer tokens:
   ```cpp
-  // Deposit to buffer
-  std::map<std::string, double> tradeRates = {{"OTHER_TOKEN", 0.5}};
-
-  auto depositResponse = client->depositBufferToken(
-      "CRZY",          // tokenSlug
-      100,             // amount
-      tradeRates       // tradeRates
-  );
-
-  // Withdraw from buffer
-  auto withdrawResponse = client->withdrawBufferToken(
-      "CRZY",  // tokenSlug
-      50       // amount
-  );
-
-  std::cout << depositResponse.data() << " " << withdrawResponse.data() << std::endl;
+  auto deposited = client->depositBufferToken("CRZY", 100, {{"OTHER", "0.5"}}).get();   // trade rates
+  auto withdrawn = client->withdrawBufferToken("CRZY", 50).get();
   ```
 
-- Getting client information:
-
+- Client state:
   ```cpp
-  // Get bundle hash
-  std::string bundleHash = client->getBundle();
-  std::cout << "Bundle: " << bundleHash << std::endl;
-
-  // Check if authenticated
-  bool authenticated = client->isAuthenticated();
+  std::cout << client->getBundle() << " " << client->isAuthenticated() << std::endl;
+  client->switchEncryption(true);   // ML-KEM encrypted transport for the session
   ```
 
-## Advanced Usage: Working with Molecules
+## The Granular Way: Building Molecules
 
-For more granular control, you can work directly with Molecules:
+`createMolecule()` returns a molecule whose source wallet is the USER wallet at your bundle's
+live ContinuID position and whose remainder wallet is a fresh USER wallet; fill it with one of
+the `Molecule::init*` builders, then submit it. `proposeMolecule` signs the molecule with the
+client's secret and takes ownership of it:
 
-- Create a new Molecule:
-  ```cpp
-  #include <knishio/Molecule.h>
+```cpp
+auto molecule = client->createMolecule();
+molecule->initMeta(*molecule->sourceWallet, {{"foo", "Foo"}, {"bar", "Bar"}}, "MyMetaType", "MetaId123");
+auto proposed = client->proposeMolecule(molecule.release()).get();
+std::cout << (proposed->isAccepted() ? "accepted" : proposed->getRejectionReason()) << std::endl;
+```
 
-  knishio::Molecule molecule(
-      secret,
-      sourceWallet,
-      cellSlug
-  );
-  ```
+Building and checking a molecule offline, without a client:
 
-- Create a custom Mutation:
-  ```cpp
-  #include <knishio/mutation/MutationProposeMolecule.h>
+```cpp
+KnishIO::Wallet source(secret, "USER", position);    // the USER wallet at your ContinuID position
+KnishIO::Wallet remainder(secret, "USER");           // a fresh position
+KnishIO::Molecule offline("my-cell-slug");
+offline.sourceWallet = std::make_shared<KnishIO::Wallet>(source);
+offline.remainderWallet = std::make_shared<KnishIO::Wallet>(remainder);
+offline.initMeta(source, {{"foo", "Foo"}}, "MyMetaType", "MetaId123");
+offline.sign(secret);
 
-  knishio::mutation::MutationProposeMolecule mutation(molecule);
-  ```
+KnishIO::Molecule::check(offline);                     // throws the rule that failed
+const bool valid = KnishIO::Molecule::verify(offline); // the same checks, as a bool
+std::cout << offline.toJson() << " " << valid << std::endl;
+```
 
-- Sign and check a Molecule:
-  ```cpp
-  molecule.sign();
+`Molecule::verify` and `Molecule::check` apply the JS reference's molecule checks: the molecular
+hash, the one-time signature, the ContinuID atom, batch ids, the M/T/C/U/I/R/P/A isotope rules
+and value conservation. A molecule served by a validator is verified with
+`Molecule::verifyFromServerData(json)`.
 
-  if (molecule.check()) {
-      std::cout << "Molecule validation passed!" << std::endl;
-  } else {
-      std::cout << "Molecule validation failed!" << std::endl;
-  }
-  ```
+## Not implemented
 
-- Execute a custom Query or Mutation:
-  ```cpp
-  auto response = client->executeQuery(mutation);
+These parts of the JS reference SDK have no C++ counterpart yet:
 
-  if (response.success()) {
-      std::cout << "Molecule executed successfully!" << std::endl;
-  }
-  ```
-
-## The Hard Way: DIY Everything
-
-This method involves individually building Atoms and Molecules, triggering the signature and validation processes, and communicating the resulting signed Molecule mutation or Query to a Knish.IO node via GraphQL.
-
-1. Include the relevant classes in your application code:
-    ```cpp
-    #include <knishio/Molecule.h>
-    #include <knishio/Wallet.h>
-    #include <knishio/Atom.h>
-    #include <knishio/crypto/Crypto.h>
-    ```
-
-2. Generate a 2048-symbol hexadecimal secret, either randomly, or via hashing login + password + salt, OAuth secret ID, biometric ID, or any other static value.
-
-3. (optional) Initialize a signing wallet with:
-   ```cpp
-   knishio::Wallet wallet(
-       secret,           // secret
-       token,            // token
-       position,         // position (optional)
-       characters        // characters (optional)
-   );
-   ```
-
-   **WARNING 1:** If ContinuID is enabled on the node, you will need to use a specific wallet, and therefore will first need to query the node to retrieve the `position` for that wallet.
-
-   **WARNING 2:** The Knish.IO protocol mandates that all C and M transactions be signed with a `USER` token wallet.
-
-4. Build your molecule with:
-   ```cpp
-   knishio::Molecule molecule(
-       secret,              // secret
-       sourceWallet,        // sourceWallet (optional)
-       remainderWallet,     // remainderWallet (optional)
-       cellSlug             // cellSlug (optional)
-   );
-   ```
-
-5. Either use one of the shortcut methods provided by the `Molecule` class (which will build `Atom` instances for you), or create `Atom` instances yourself.
-
-   DIY example:
-    ```cpp
-    // This example records a new Wallet on the ledger
-
-    // Define metadata for our new wallet
-    std::map<std::string, std::string> newWalletMeta = {
-        {"address", newWallet.address},
-        {"token", newWallet.token},
-        {"bundle", newWallet.bundle},
-        {"position", newWallet.position},
-        {"batchId", newWallet.batchId}
-    };
-
-    // Build the C isotope atom
-    knishio::Atom walletCreationAtom(
-        sourceWallet.position,    // position
-        sourceWallet.address,     // walletAddress
-        Isotope::C,               // isotope
-        sourceWallet.token        // token
-    );
-    walletCreationAtom.metaType = "wallet";
-    walletCreationAtom.metaId = newWallet.address;
-    walletCreationAtom.meta = newWalletMeta;
-    walletCreationAtom.index = molecule.generateIndex();
-
-    // Add the atom to our molecule
-    molecule.addAtom(walletCreationAtom);
-
-    // Adding a ContinuID / remainder atom
-    molecule.addContinuIdAtom();
-    ```
-
-   Molecule shortcut method example:
-    ```cpp
-    // This example commits metadata to some Meta Asset
-
-    // Defining our metadata
-    std::map<std::string, std::string> metadata = {
-        {"foo", "Foo"},
-        {"bar", "Bar"}
-    };
-
-    molecule.initMeta(
-        metadata,
-        "MyMetaType",
-        "MetaId123"
-    );
-    ```
-
-6. Sign the molecule with the stored user secret:
-    ```cpp
-    molecule.sign();
-    ```
-
-7. Make sure everything checks out by verifying the molecule:
-    ```cpp
-    if (knishio::Molecule::verify(molecule)) {
-        std::cout << "Molecule validation passed!" << std::endl;
-    } else {
-        std::cout << "Molecule validation failed!" << std::endl;
-    }
-    ```
-
-8. Broadcast the molecule to a Knish.IO node:
-    ```cpp
-    #include <knishio/mutation/MutationProposeMolecule.h>
-
-    // Build our mutation object
-    knishio::mutation::MutationProposeMolecule mutation(molecule);
-
-    // Send the mutation to the node and get a response
-    auto response = client->executeQuery(mutation);
-    ```
-
-9. Inspect the response...
-    ```cpp
-    // For basic queries, we look at the data property:
-    std::cout << response.data() << std::endl;
-
-    // For mutations, check if the molecule was accepted by the ledger:
-    std::cout << (response.success() ? "Success" : "Failed") << std::endl;
-
-    // We can also check the reason for rejection
-    std::cout << response.reason() << std::endl;
-
-    // Some queries may also produce a payload, with additional data:
-    std::cout << response.payload() << std::endl;
-    ```
-
-   Payloads are provided by responses to the following queries:
-    1. `QueryBalance` and `QueryContinuId` -> returns a `Wallet` instance
-    2. `QueryWalletList` -> returns a list of `Wallet` instances
-    3. `MutationProposeMolecule`, `MutationRequestAuthorization`, `MutationCreateIdentifier`, `MutationLinkIdentifier`, `MutationClaimShadowWallet`, `MutationCreateToken`, `MutationRequestTokens`, and `MutationTransferTokens` -> returns molecule metadata
+- Client operations: `queryBundle`, `queryMeta`, `queryMetaVerified`, `queryAtom`, `queryBatch`,
+  `queryBatchHistory`, `queryPolicy`, `queryActiveSession`, `queryEmbeddingStatus`,
+  `querySourceWallet`, `hasQueryField`, `createRule`, `createPolicy`, `createIdentifier`,
+  `linkIdentifier`, `registerPeer`, `appendRequest`, `activeSession`, `requestTokens`,
+  `claimShadowWallets`, `requestGuestAuthToken`, `requestProfileAuthToken`, every `subscribe*` /
+  `unsubscribe*` operation, and secret-storage integration in the client (the storage providers
+  below exist on their own).
+- Molecule builders: `createRule`, `addPolicyAtom`, `initIdentifierCreation`, `initPeering`,
+  `initAppendRequest`, `initTokenRequest`, `burnToken`, `withParentHashes`.
+- Classes: `AtomMeta`, `Meta`, `PolicyMeta`, `AuthToken`, `CheckMolecule` (its checks are
+  `Molecule::check` / `Molecule::verify`), `Rule`, `Decimal`, and the per-operation
+  `Query*` / `Mutation*` / `Subscribe*` / `Response*` classes other than `QueryBalance` and the
+  responses in `response/Response.h`.
+- Amounts are whole numbers within ±(2^53 − 1); fractional amounts are not supported.
 
 ## Network Freshness
 

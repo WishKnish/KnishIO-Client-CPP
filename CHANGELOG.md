@@ -39,6 +39,15 @@ substantiate a detail, the entry says so instead of guessing.
   `generateBatchId(const Molecule&)`.
 - `KnishIOClient::createMolecule` returns `std::unique_ptr<Molecule>` and copies the
   `const Wallet*` it is given (it returned a raw pointer and deleted the caller's wallet).
+- `README.md` documents the API the headers declare (its examples compile against the installed
+  headers; it named methods and headers that do not exist) and lists the JS operations this SDK
+  does not implement.
+
+### Removed
+
+- `self-test-compatible.o` (a prebuilt object file) and `test_client.cpp` (scratch code that did
+  not compile) are no longer tracked; `.gitignore` no longer lists `/external/`, which holds the
+  tracked `external/mlkem-native` submodule.
 
 ### Fixed
 
