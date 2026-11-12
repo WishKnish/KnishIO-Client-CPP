@@ -32,6 +32,20 @@ substantiate a detail, the entry says so instead of guessing.
   master, which a standalone checkout does not have, so CI reported it skipped) and fails when the
   file is missing. `ServedMolecules` also fails instead of skipping when a fixture is missing.
 
+### Fixed
+
+- `Molecule::verify` and `Molecule::check` apply the JS reference checks they lacked: the
+  ContinuID atom (now in `verify` too), the V batch-id chain, the M/T/C/U/I/R/P/A isotope rules
+  (token, index, policy, rule and meta checks) and the V-transfer rules (every V atom in the token
+  of `atoms[0]`, no negative value and no transfer to the signing address after `atoms[0]`).
+  Molecules with a negative recipient, a self-transfer, mixed tokens, a forged isotope token or a
+  malformed policy or rule verified until now. `MoleculeCheckRules` is the regression test.
+- `Atom::hashAtoms` hashes the atoms in index order and `Molecule::jsonToObject` sorts them by
+  index, as JS does, so a molecule served with its atoms out of order verifies. `jsonToObject`
+  accepts atoms without a position or address (burn, shadow-recipient, withdraw and fusion
+  atoms, including those from `toJson()`) and null `position`, `walletAddress`, `isotope` and
+  `token`; `Atom::hashAtoms({})` throws `AtomsNotFoundException`.
+
 ### Security
 
 - The reply to a request the client sent in the `CipherHash` envelope is accepted only if it is an

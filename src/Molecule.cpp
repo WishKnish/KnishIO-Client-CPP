@@ -996,14 +996,25 @@ Molecule Molecule::jsonToObject(const std::string &jsonStr)
 		{
 			auto atom = Atom::jsonToObject(jsonAtom.dump());
 
-			if (atom.position.empty()
-				|| atom.walletAddress.empty()
-				|| atom.isotope.empty())
+			// Every atom needs an isotope. Position and address may be empty: burn, shadow-recipient,
+			// withdraw and fusion atoms have none (JS Molecule.jsonToObject accepts "" for them).
+			if (atom.isotope.empty())
 			{
 				throw AtomsNotFoundException("The required properties of the atom are not filled.");
 			}
 
 			molecule.atoms.push_back(atom);
+		}
+
+		// JS Molecule.jsonToObject: atoms are kept in index order (Atom.sortAtoms, stable)
+		std::stable_sort(molecule.atoms.begin(), molecule.atoms.end(),
+			[](const Atom &a, const Atom &b) { return a.index < b.index; });
+
+		// The signing atom carries the signer's position and address, except an R atom
+		if (!molecule.atoms.empty() && molecule.atoms.front().isotope != "R"
+			&& (molecule.atoms.front().position.empty() || molecule.atoms.front().walletAddress.empty()))
+		{
+			throw AtomsNotFoundException("The required properties of the atom are not filled.");
 		}
 	}
 
@@ -1022,11 +1033,10 @@ Molecule Molecule::jsonToObject(const std::string &jsonStr)
 
 bool Molecule::verify(const Molecule &molecule)
 {
-	// Mirrors JS CheckMolecule: hash integrity, isotope conservation, AND the one-time
-	// signature. verifyOts() needs no wallet — it rebuilds the signing address from the
-	// fragments and compares it to atoms[0].walletAddress — so nothing about cross-SDK
-	// validation justifies skipping it. It was skipped; that is why C++ accepted every peer
-	// while emitting signatures no peer accepted.
+	// Mirrors JS CheckMolecule.verify() (no sender wallet): hash integrity, the one-time signature,
+	// conservation, the ContinuID atom, batchId and the per-isotope rules. verifyOts() needs no
+	// wallet — it rebuilds the signing address from the fragments and compares it to
+	// atoms[0].walletAddress.
 	bool hashValid = verifyMolecularHash(molecule);
 
 	bool tokenValid = false;
@@ -1046,7 +1056,16 @@ bool Molecule::verify(const Molecule &molecule)
 		otsValid = false;
 	}
 
-	return hashValid && tokenValid && otsValid;
+	bool rulesValid = false;
+
+	try {
+		checkIsotopes(molecule);
+		rulesValid = true;
+	} catch (const std::exception&) {
+		rulesValid = false;
+	}
+
+	return hashValid && tokenValid && otsValid && verifyContinuId(molecule) && rulesValid;
 }
 
 bool Molecule::verifyContinuId(const Molecule &molecule)
@@ -1056,6 +1075,381 @@ bool Molecule::verifyContinuId(const Molecule &molecule)
 	}
 	return std::any_of(molecule.atoms.begin(), molecule.atoms.end(),
 		[](const Atom &a) { return a.isotope == "I"; });
+}
+
+namespace {
+
+using knishio::MoleculeException;
+
+// Atom.aggregatedMeta(): key -> value, the last entry winning. Meta parsed with a null value is
+// present (JS keeps the key) with a null value.
+nlohmann::json aggregatedMeta(const Atom &atom)
+{
+	nlohmann::json metas = nlohmann::json::object();
+	for (const auto &item : atom.nullMeta) {
+		metas[item.second] = nullptr;
+	}
+	for (const auto &item : atom.meta) {
+		metas[item.first] = item.second;
+	}
+	return metas;
+}
+
+// JavaScript truthiness of a JSON value.
+bool truthy(const nlohmann::json &value)
+{
+	if (value.is_null()) {
+		return false;
+	}
+	if (value.is_boolean()) {
+		return value.get<bool>();
+	}
+	if (value.is_string()) {
+		return !value.get<std::string>().empty();
+	}
+	if (value.is_number()) {
+		const double d = value.get<double>();
+		return d != 0.0 && !std::isnan(d);
+	}
+	return true;   // objects and arrays, even empty ones
+}
+
+bool metaTruthy(const nlohmann::json &metas, const char *key)
+{
+	const auto it = metas.find(key);
+	return it != metas.end() && truthy(*it);
+}
+
+// JS Number(string): surrounding whitespace ignored, "" is 0, anything else must be a complete
+// finite decimal number. std::nullopt is NaN.
+std::optional<double> jsNumber(const std::string &text)
+{
+	const auto first = text.find_first_not_of(" \t\r\n\f\v");
+	if (first == std::string::npos) {
+		return 0.0;
+	}
+	const auto last = text.find_last_not_of(" \t\r\n\f\v");
+	const std::string trimmed = text.substr(first, last - first + 1);
+	for (const char c : trimmed) {
+		if (!(std::isdigit(static_cast<unsigned char>(c)) != 0 || c == '+' || c == '-' || c == '.' || c == 'e' || c == 'E')) {
+			return std::nullopt;
+		}
+	}
+	char *end = nullptr;
+	const double value = std::strtod(trimmed.c_str(), &end);
+	if (end != trimmed.c_str() + trimmed.size() || !std::isfinite(value)) {
+		return std::nullopt;
+	}
+	return value;
+}
+
+// Wallet.isBundleHash: 64 hexadecimal characters, either case.
+bool isBundleHash(const nlohmann::json &value)
+{
+	if (!value.is_string()) {
+		return false;
+	}
+	const auto s = value.get<std::string>();
+	return s.size() == 64 && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
+}
+
+// `for (const x of value)` over a parsed JSON value: arrays yield their items, strings their
+// characters; anything else is not iterable (a TypeError in JS).
+std::vector<nlohmann::json> iterate(const nlohmann::json &value, const std::string &what)
+{
+	std::vector<nlohmann::json> items;
+	if (value.is_array()) {
+		items.assign(value.begin(), value.end());
+	} else if (value.is_string()) {
+		for (const char c : value.get<std::string>()) {
+			items.emplace_back(std::string(1, c));
+		}
+	} else {
+		throw MoleculeException(what + " is not iterable");
+	}
+	return items;
+}
+
+nlohmann::json parseMetaJson(const nlohmann::json &metas, const char *key, const std::string &rule)
+{
+	const auto &raw = metas.at(key);
+	const auto parsed = nlohmann::json::parse(raw.is_string() ? raw.get<std::string>() : raw.dump(), nullptr, false);
+	if (parsed.is_discarded()) {
+		throw MoleculeException(rule + " - \"" + key + "\" meta is not valid JSON");
+	}
+	return parsed;
+}
+
+void wrongToken(const char *rule, const Atom &atom)
+{
+	throw MoleculeException(std::string("Check::") + rule + " - \"" + atom.token
+		+ "\" is not a valid Token slug for \"" + atom.isotope + "\" isotope Atoms!");
+}
+
+// JS Rule.toObject(item): condition and callback present; every condition has a key, value and
+// comparison; every callback an action; a callback amount must be numeric.
+void checkRule(const nlohmann::json &item)
+{
+	const auto field = [&item](const char *key) -> nlohmann::json {
+		return item.is_object() && item.contains(key) ? item.at(key) : nlohmann::json(nullptr);
+	};
+	const auto condition = field("condition");
+	if (!truthy(condition)) {
+		throw MoleculeException("Rule::toObject() - Incorrect rule format! There is no condition field.");
+	}
+	const auto callback = field("callback");
+	if (!truthy(callback)) {
+		throw MoleculeException("Rule::toObject() - Incorrect rule format! There is no callback field.");
+	}
+	for (const auto &c : iterate(condition, "Rule condition")) {
+		for (const char *key : {"key", "value", "comparison"}) {
+			if (!c.is_object() || !c.contains(key) || !truthy(c.at(key))) {
+				throw MoleculeException("Condition::constructor( { key, value, comparison } ) - not all class parameters are initialised!");
+			}
+		}
+	}
+	for (const auto &c : iterate(callback, "Rule callback")) {
+		if (!c.is_object() || !c.contains("action") || !truthy(c.at("action"))) {
+			throw MoleculeException("Callback structure violated, missing mandatory \"action\" parameter.");
+		}
+		if (c.contains("amount") && truthy(c.at("amount"))) {
+			const auto &amount = c.at("amount");
+			const bool numeric = amount.is_number()
+				|| (amount.is_string() && jsNumber(amount.get<std::string>()).has_value()
+					&& amount.get<std::string>().find_first_not_of(" \t\r\n\f\v") != std::string::npos);
+			if (!numeric) {
+				throw MoleculeException("Parameter amount should be a string containing numbers");
+			}
+		}
+	}
+}
+
+} // namespace
+
+void Molecule::checkIsotopes(const Molecule &molecule)
+{
+	if (molecule.atoms.empty()) {
+		throw AtomsNotFoundException();
+	}
+	const Atom &first = molecule.atoms.front();
+	const auto isotopes = [&molecule](const char *isotope) {
+		std::vector<const Atom *> out;
+		for (const auto &atom : molecule.atoms) {
+			if (atom.isotope == isotope) {
+				out.push_back(&atom);
+			}
+		}
+		return out;
+	};
+	const auto vAtoms = isotopes("V");
+
+	// batchId(): a batched V transfer keeps its batch on the remainder and on every V atom
+	if (first.isotope == "V" && !first.batchId.empty()) {
+		if (vAtoms.back()->batchId != first.batchId) {
+			throw MoleculeException("Check::batchId() - the remainder atom does not carry the signing atom's batch id");
+		}
+		for (const Atom *atom : vAtoms) {
+			if (atom->batchId.empty()) {
+				throw MoleculeException("Check::batchId() - a V atom has no batch id");
+			}
+		}
+	}
+
+	// isotopeM(): USER token, at least one meta, and well-formed read/write policies
+	for (const Atom *atom : isotopes("M")) {
+		if (atom->meta.empty() && atom->nullMeta.empty()) {
+			throw MoleculeException("Check::isotopeM() - Meta is missing!");
+		}
+		if (atom->token != "USER") {
+			wrongToken("isotopeM()", *atom);
+		}
+		const auto metas = aggregatedMeta(*atom);
+		for (const char *key : {"readPolicy", "writePolicy"}) {
+			if (!metaTruthy(metas, key)) {
+				continue;
+			}
+			const auto policy = parseMetaJson(metas, key, "Check::isotopeM()");
+			if (!policy.is_object()) {
+				continue;   // Object.entries of a non-object policy yields nothing to check
+			}
+			for (const auto &entry : policy.items()) {
+				if (entry.key() == "readPolicy" || entry.key() == "writePolicy") {
+					continue;
+				}
+				if (!metas.contains(entry.key())) {
+					throw MoleculeException(entry.key() + " is missing from the meta.");
+				}
+				for (const auto &value : iterate(entry.value(), "Policy " + entry.key())) {
+					const bool keyword = value.is_string() && (value.get<std::string>() == "all" || value.get<std::string>() == "self");
+					if (!isBundleHash(value) && !keyword) {
+						throw MoleculeException((value.is_string() ? value.get<std::string>() : value.dump())
+							+ " does not correspond to the format of the policy.");
+					}
+				}
+			}
+		}
+	}
+
+	// isotopeT(): wallet metas when the metaType is "wallet", a token meta, USER token, index 0
+	for (const Atom *atom : isotopes("T")) {
+		const auto metas = aggregatedMeta(*atom);
+		std::string metaType = atom->metaType.empty() ? "null" : atom->metaType;
+		std::transform(metaType.begin(), metaType.end(), metaType.begin(),
+			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		if (metaType == "wallet") {
+			for (const char *key : {"position", "bundle"}) {
+				if (!metaTruthy(metas, key)) {
+					throw MoleculeException(std::string("Check::isotopeT() - Required meta field \"") + key + "\" is missing!");
+				}
+			}
+		}
+		if (!metaTruthy(metas, "token")) {
+			throw MoleculeException("Check::isotopeT() - Required meta field \"token\" is missing!");
+		}
+		if (atom->token != "USER") {
+			wrongToken("isotopeT()", *atom);
+		}
+		if (atom->index != 0) {
+			throw MoleculeException("Check::isotopeT() - Isotope \"T\" Atoms must have an index equal to 0!");
+		}
+	}
+
+	// isotopeC(): USER token, index 0
+	for (const Atom *atom : isotopes("C")) {
+		if (atom->token != "USER") {
+			wrongToken("isotopeC()", *atom);
+		}
+		if (atom->index != 0) {
+			throw MoleculeException("Check::isotopeC() - Isotope \"C\" Atoms must have an index equal to 0!");
+		}
+	}
+
+	// isotopeU(): AUTH (first login) or USER (re-login from the ContinuID wallet), index 0
+	for (const Atom *atom : isotopes("U")) {
+		if (atom->token != "AUTH" && atom->token != "USER") {
+			wrongToken("isotopeU()", *atom);
+		}
+		if (atom->index != 0) {
+			throw MoleculeException("Check::isotopeU() - Isotope \"U\" Atoms must have an index equal to 0!");
+		}
+	}
+
+	// isotopeI(): USER token, non-zero index
+	for (const Atom *atom : isotopes("I")) {
+		if (atom->token != "USER") {
+			wrongToken("isotopeI()", *atom);
+		}
+		if (atom->index == 0) {
+			throw MoleculeException("Check::isotopeI() - Isotope \"I\" Atoms must have a non-zero index!");
+		}
+	}
+
+	// isotopeR(): a policy holds only read/write; a rule is a non-empty array of valid rules
+	for (const Atom *atom : isotopes("R")) {
+		const auto metas = aggregatedMeta(*atom);
+		if (metaTruthy(metas, "policy")) {
+			const auto policy = parseMetaJson(metas, "policy", "Check::isotopeR()");
+			if (policy.is_object()) {
+				for (const auto &entry : policy.items()) {
+					if (entry.key() != "read" && entry.key() != "write") {
+						throw MoleculeException("Check::isotopeR() - Mixing rules with politics!");
+					}
+				}
+			}
+		}
+		if (metaTruthy(metas, "rule")) {
+			const auto rules = parseMetaJson(metas, "rule", "Check::isotopeR()");
+			if (!rules.is_array()) {
+				throw MoleculeException("Check::isotopeR() - Incorrect rule format!");
+			}
+			for (const auto &item : rules) {
+				checkRule(item);
+			}
+			if (rules.empty()) {
+				throw MoleculeException("Check::isotopeR() - No rules!");
+			}
+		}
+	}
+
+	// isotopeP(): USER token and a peerHost meta
+	for (const Atom *atom : isotopes("P")) {
+		if (atom->token != "USER") {
+			wrongToken("isotopeP()", *atom);
+		}
+		if (!metaTruthy(aggregatedMeta(*atom), "peerHost")) {
+			throw MoleculeException("Check::isotopeP() - Required meta field \"peerHost\" is missing!");
+		}
+	}
+
+	// isotopeA(): USER token, metaType, metaId and an action meta
+	for (const Atom *atom : isotopes("A")) {
+		if (atom->token != "USER") {
+			wrongToken("isotopeA()", *atom);
+		}
+		if (atom->metaType.empty()) {
+			throw MoleculeException("Check::isotopeA() - Required field \"metaType\" is missing!");
+		}
+		if (atom->metaId.empty()) {
+			throw MoleculeException("Check::isotopeA() - Required field \"metaId\" is missing!");
+		}
+		if (!metaTruthy(aggregatedMeta(*atom), "action")) {
+			throw MoleculeException("Check::isotopeA() - Required meta field \"action\" is missing!");
+		}
+	}
+
+	// isotopeV() without a sender wallet
+	if (vAtoms.empty()) {
+		return;
+	}
+	const bool hasCrossIsotope = std::any_of(molecule.atoms.begin(), molecule.atoms.end(),
+		[](const Atom &a) { return a.isotope == "B" || a.isotope == "F"; });
+	const auto number = [](const Atom &atom) {
+		const auto value = jsNumber(atom.value);
+		if (!value) {
+			throw MoleculeException("Invalid isotope \"V\" values");
+		}
+		return *value;
+	};
+
+	if (!hasCrossIsotope && first.isotope == "V" && vAtoms.size() == 2) {
+		const Atom &end = *vAtoms.back();
+		if (first.token != end.token) {
+			throw MoleculeException("Check::isotopeV() - V atoms of different tokens (TransferMismatched)");
+		}
+		const auto endValue = jsNumber(end.value);
+		if (endValue && *endValue < 0) {
+			throw MoleculeException("Check::isotopeV() - negative recipient value (TransferMalformed)");
+		}
+		const auto firstValue = jsNumber(first.value);
+		if (!firstValue || !endValue || *firstValue + *endValue != 0) {
+			throw MoleculeException("Check::isotopeV() - V atoms do not balance (TransferUnbalanced)");
+		}
+		return;
+	}
+
+	double sum = 0;
+	for (size_t position = 0; position < molecule.atoms.size(); ++position) {
+		const Atom &atom = molecule.atoms[position];
+		if (atom.isotope != "V") {
+			continue;
+		}
+		const double value = number(atom);
+		if (atom.token != first.token) {
+			throw MoleculeException("Check::isotopeV() - V atoms of different tokens (TransferMismatched)");
+		}
+		if (position > 0) {
+			if (value < 0) {
+				throw MoleculeException("Check::isotopeV() - negative value after the signing atom (TransferMalformed)");
+			}
+			if (atom.walletAddress == first.walletAddress) {
+				throw MoleculeException("Check::isotopeV() - sending and receiving from the same address (TransferToSelf)");
+			}
+		}
+		sum += value;
+	}
+	if (!hasCrossIsotope && sum != 0) {
+		throw MoleculeException("Check::isotopeV() - V atoms do not balance (TransferUnbalanced)");
+	}
 }
 
 void Molecule::check(const Molecule &molecule)
@@ -1071,6 +1465,7 @@ void Molecule::check(const Molecule &molecule)
 	}
 	// Throws SignatureMalformedException / SignatureMismatchException unchanged
 	verifyOts(molecule);
+	checkIsotopes(molecule);
 	bool tokenValid = false;
 	try {
 		tokenValid = verifyTokenIsotopeV(molecule);

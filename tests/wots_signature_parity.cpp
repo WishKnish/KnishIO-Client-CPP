@@ -286,7 +286,8 @@ int main() {
     //     [196 x6, 192] split (the JS Math.ceil per-atom boundaries, which are wire format).
     try {
         const std::string secret = knishio::KnishIOClient::generateSecret("wots-ceil-chunking-seed");
-        const std::string token = "USER";
+        // Not USER: a USER-signed molecule must carry a ContinuID atom (JS CheckMolecule.continuId)
+        const std::string token = "TEST";
         Wallet source(secret, token);
         source.balance = "1000";
 

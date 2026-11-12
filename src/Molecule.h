@@ -80,6 +80,8 @@ public:
 	// counts 8 - n / 8 + n diverge from every other SDK. The type is the invariant here.
 	static std::vector<int8_t> enumerate(const std::string &hash);
 	static std::vector<int8_t> normalize(const std::vector<int8_t> &mappedHashArray);
+	// JS CheckMolecule.verify() without a sender wallet: the molecular hash, the one-time signature,
+	// conservation, the ContinuID atom and checkIsotopes(). False instead of an exception.
 	static bool verify(const Molecule &molecule);
 	static bool verifyMolecularHash(const Molecule &molecule);
 	// Verifies the one-time signature (16 or 64 chains). Throws knishio::SignatureMalformedException
@@ -88,8 +90,12 @@ public:
 	static void verifyOts(const Molecule &molecule);
 	static bool verifyTokenIsotopeV(const Molecule &molecule);
 	// JS CheckMolecule.continuId: a molecule signed by a USER wallet (atoms[0].token == "USER") must
-	// carry a ContinuID (I) atom. Part of check(), not verify(); the validator's Tier 1 enforces it too.
+	// carry a ContinuID (I) atom. Part of check() and verify(); the validator's Tier 1 enforces it too.
 	static bool verifyContinuId(const Molecule &molecule);
+	// JS CheckMolecule batchId() and isotopeM/T/C/U/I/R/P/A/V() (V without a sender wallet: same
+	// token as atoms[0], no negative value or self-transfer after atoms[0], V-only conservation).
+	// Throws knishio::MoleculeException naming the rule that failed. Part of verify() and check().
+	static void checkIsotopes(const Molecule &molecule);
 	// Pre-submit check (contract 9.7) of a signed molecule: throws AtomsNotFoundException when the
 	// molecule has no atoms or lacks its ContinuID atom (JS AtomsMissingException),
 	// std::runtime_error when the hash or conservation do not verify, and verifyOts()'s

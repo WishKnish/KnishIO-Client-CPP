@@ -433,6 +433,29 @@ set_tests_properties(CreateMetaMolecule PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:create_meta_molecule>
 )
 
+# Molecule::verify / Molecule::check follow JS CheckMolecule (ContinuID, batchId, the M/T/C/U/I/R/P/A
+# isotope rules, the V-transfer rules), atoms are hashed and parsed in index order, and atoms without
+# a position or address parse back. Signed offline. No network.
+add_executable(molecule_check_rules molecule_check_rules.cpp)
+target_link_libraries(molecule_check_rules
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(molecule_check_rules PRIVATE cxx_std_20)
+set_target_properties(molecule_check_rules PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME MoleculeCheckRules
+    COMMAND molecule_check_rules
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(MoleculeCheckRules PROPERTIES
+    LABELS "molecule;verify;unit"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:molecule_check_rules>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage

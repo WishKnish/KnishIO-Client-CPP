@@ -1,4 +1,5 @@
 #include "Atom.h"
+#include "AtomsNotFoundException.h"
 
 #include "third_party/nlohmann/json.hpp"
 #include "third_party/Keccak/Keccak.h"
@@ -59,7 +60,7 @@ Atom Atom::jsonToObject(const std::string &jsonStr)
 	{
 		auto value = json.find(c_values[i]);
 
-		if (value != json.end())
+		if (value != json.end() && !value->is_null())
 		{
 			switch (i)
 			{
@@ -235,15 +236,27 @@ std::string Atom::version4ViewJson(const std::vector<Atom> &atoms)
 
 std::vector<unsigned char> Atom::hashAtoms(const std::vector<Atom> &atoms)
 {
+	// JS Atom.hashAtoms throws AtomsMissingException for an empty list
+	if (atoms.empty()) {
+		throw AtomsNotFoundException();
+	}
+
 	// Every atom carries a version (any value): hash the Version4 structured view.
-	if (!atoms.empty() && std::all_of(atoms.begin(), atoms.end(), [](const Atom &a) { return a.version.has_value(); })) {
+	if (std::all_of(atoms.begin(), atoms.end(), [](const Atom &a) { return a.version.has_value(); })) {
 		return shake256(version4ViewJson(atoms), 256);
 	}
 
+	// JS Atom.sortAtoms: the atoms are hashed in index order, not array order (stable)
+	std::vector<size_t> order(atoms.size());
+	std::iota(order.begin(), order.end(), size_t{0});
+	std::stable_sort(order.begin(), order.end(), [&atoms](size_t a, size_t b) { return atoms[a].index < atoms[b].index; });
+
 	std::string molecularSponge;
 
-	for (const auto &atom : atoms)
+	for (const size_t i : order)
 	{
+		const Atom &atom = atoms[i];
+
 		// Number of atoms (appended per atom — matches JavaScript/C logic)
 		molecularSponge.append(std::to_string(atoms.size()));
 
