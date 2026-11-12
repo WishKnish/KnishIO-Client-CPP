@@ -471,6 +471,8 @@ std::vector<uint8_t> Wallet::decryptWithSharedSecret(const std::vector<uint8_t>&
     EVP_CIPHER_CTX_free(ctx);
 
     if (!ok || ret <= 0) {
+        // Unauthenticated plaintext never leaves this function, not even in freed memory
+        sodium_memzero(plaintext.data(), plaintext.size());
         throw std::runtime_error("AES-256-GCM decryption failed: authentication tag mismatch");
     }
 

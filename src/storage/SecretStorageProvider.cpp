@@ -183,6 +183,10 @@ void MemorySecretStorageProvider::storeSecret(const std::string& bundleHash,
     meta.providerType = "memory";
 
     std::lock_guard<std::mutex> lock(mutex_);
+    auto existing = store_.find(bundleHash);
+    if (existing != store_.end()) {
+        zeroizeString(existing->second.secret);
+    }
     store_[bundleHash] = Entry{secret, meta};
 
     if (options.recoveryPassphrase.has_value()) {
@@ -214,14 +218,28 @@ std::optional<std::string> MemorySecretStorageProvider::retrieveSecret(const std
 bool MemorySecretStorageProvider::deleteSecret(const std::string& bundleHash) {
     std::lock_guard<std::mutex> lock(mutex_);
     bool removedRec = recoveryStore_.erase(bundleHash) > 0;
-    bool removedPrim = store_.erase(bundleHash) > 0;
+    auto it = store_.find(bundleHash);
+    bool removedPrim = it != store_.end();
+    if (removedPrim) {
+        zeroizeString(it->second.secret);
+        store_.erase(it);
+    }
     return removedPrim || removedRec;
 }
 
 void MemorySecretStorageProvider::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& [_, entry] : store_) {
+        zeroizeString(entry.secret);
+    }
     store_.clear();
     recoveryStore_.clear();
+}
+
+MemorySecretStorageProvider::~MemorySecretStorageProvider() {
+    for (auto& [_, entry] : store_) {
+        zeroizeString(entry.secret);
+    }
 }
 
 bool MemorySecretStorageProvider::hasSecret(const std::string& bundleHash) {

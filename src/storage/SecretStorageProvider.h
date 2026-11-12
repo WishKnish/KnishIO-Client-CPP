@@ -160,7 +160,7 @@ private:
 class MemorySecretStorageProvider : public SecretStorageProvider {
 public:
     MemorySecretStorageProvider() = default;
-    ~MemorySecretStorageProvider() override = default;
+    ~MemorySecretStorageProvider() override;   // wipes every held secret
 
     [[nodiscard]] std::string providerType() const override { return "memory"; }
     [[nodiscard]] bool isHardwareBacked() const override { return false; }

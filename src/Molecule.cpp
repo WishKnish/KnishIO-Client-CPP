@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <cctype>
 #include <regex>
+#include <sodium.h>
 
 #include "Wallet.h"
 #include "utility.h"
@@ -32,6 +33,24 @@ Molecule::~Molecule()
 }
 
 namespace {
+
+// Wipes signing-key material when it leaves scope, including on an exception.
+struct WipeOnExit
+{
+	std::string &key;
+	std::vector<std::string> &chunks;
+
+	WipeOnExit(std::string &keyRef, std::vector<std::string> &chunksRef) : key(keyRef), chunks(chunksRef) {}
+	WipeOnExit(const WipeOnExit &) = delete;
+	WipeOnExit &operator=(const WipeOnExit &) = delete;
+	~WipeOnExit()
+	{
+		sodium_memzero(key.data(), key.size());
+		for (auto &chunk : chunks) {
+			sodium_memzero(chunk.data(), chunk.size());
+		}
+	}
+};
 
 /**
  * Builds the prefixed wallet* meta keys in JS setMetaWallet() order, mirroring
@@ -792,6 +811,9 @@ std::string Molecule::sign(const std::string &secret, bool anonymous, bool compr
 	// Subdivide the key into 128-character segments: 16 (v1) or 64 (v2)
 	auto keyChunks = chunkSubstr(key, 128);
 
+	// The key, its chunks and every intermediate chain value are wiped on every exit path
+	const WipeOnExit wipeKey{key, keyChunks};
+
 	// Convert Hm to numeric notation, and then normalize
 	auto normalizedHash = Molecule::normalize(Molecule::enumerate(this->molecularHash));
 
@@ -813,14 +835,17 @@ std::string Molecule::sign(const std::string &secret, bool anonymous, bool compr
 #endif
 	for (size_t index = 0; index < keyChunks.size(); index++)
 	{
-		auto workingChunk = keyChunks[index];
+		std::string workingChunk = keyChunks[index];
 
 		for (int iterationCount = 0, condition = 8 - normalizedHash[index]; iterationCount < condition; iterationCount++)
 		{
-			workingChunk = shake256Hex(workingChunk, 512);
+			std::string next = shake256Hex(workingChunk, 512);
+			sodium_memzero(workingChunk.data(), workingChunk.size());
+			workingChunk = std::move(next);
 		}
 
 		signatureFragments += workingChunk;
+		sodium_memzero(workingChunk.data(), workingChunk.size());
 	}
 
 	// Compressing the OTS — JS Molecule.sign() default (compressed=true → hexToBase64):

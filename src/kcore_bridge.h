@@ -8,6 +8,7 @@
 #ifdef KNISHIO_HAVE_KCORE
 
 #include <kcore.h>
+#include <sodium.h>
 
 #include <string>
 #include <vector>
@@ -65,13 +66,18 @@ inline bool chainsHex(const std::vector<std::string> &chunks, const std::vector<
 	}
 	std::string buf;
 	buf.reserve(n * 128);
+	// buf holds signing-key chunks on the sign path: wipe it on every exit path but success,
+	// where it becomes the caller's output.
+	const auto wipe = [&buf]() { sodium_memzero(buf.data(), buf.size()); };
 	for (size_t i = 0; i < n; i++) {
 		if (!isLowerHex(chunks[i], 128) || counts[i] < 0 || counts[i] > 64) {
+			wipe();
 			return false;
 		}
 		buf += chunks[i];
 	}
 	if (kcore_chains_hex(buf.data(), counts.data(), n, 4) != 0) {
+		wipe();
 		return false;
 	}
 	out = std::move(buf);

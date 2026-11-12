@@ -72,6 +72,10 @@ substantiate a detail, the entry says so instead of guessing.
   was returned as if the validator had sent it. The PHP and C SDKs already applied this rule. The
   plaintext bootstrap operations (`__schema`, `ContinuId`, `AccessToken`, U-isotope
   `ProposeMolecule`) are unaffected. `EncryptedReplyRule` is the regression test.
+- The WOTS+ signing key, its chunks and every intermediate chain value are wiped after signing,
+  on error paths too (including kcore's chain buffer); `MemorySecretStorageProvider` wipes a
+  secret when it is replaced, deleted, cleared or destroyed; AES-256-GCM decryption wipes the
+  plaintext when the tag does not verify.
 
 ## [2.2.1] — 2026-10-27
 
