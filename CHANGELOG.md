@@ -31,6 +31,12 @@ substantiate a detail, the entry says so instead of guessing.
 - `OtsV2Vectors` reads the vendored `tests/fixtures/ots-v2-vectors.json` (it read the monorepo
   master, which a standalone checkout does not have, so CI reported it skipped) and fails when the
   file is missing. `ServedMolecules` also fails instead of skipping when a fixture is missing.
+- Breaking: `KnishIOClient::createToken(token, amount, meta, batchId = "", units = {})` takes the
+  meta as an ordered `std::vector<std::pair<std::string, std::string>>` (the `std::unordered_map`
+  was hashed in bucket order) and a batch id. Callers that passed `units` fourth pass `""` before
+  them.
+- `KnishIOClient::generateBatchId(molecularHash, index)` replaces
+  `generateBatchId(const Molecule&)`.
 
 ### Fixed
 
@@ -45,6 +51,15 @@ substantiate a detail, the entry says so instead of guessing.
   accepts atoms without a position or address (burn, shadow-recipient, withdraw and fusion
   atoms, including those from `toJson()`) and null `position`, `walletAddress`, `isotope` and
   `token`; `Atom::hashAtoms({})` throws `AtomsNotFoundException`.
+- Signed bytes now equal the JS reference; no other SDK produced the bytes these molecules had
+  before. A token-creation C atom and a wallet-creation or shadow-wallet-claim C atom carry the
+  wallet's `batchId`; a stackable `createToken` names its batch in a `batchId` meta; the U atom of
+  an authorization carries only `encrypt` and `walletPubkey` (no `pubkey` or `characters`); every
+  wallet a client creates uses the client's ML-KEM parameter set (token creation, transfers, burns
+  and buffer deposits used ML-KEM-1024 on a 768 client); a balance or amount above 2^31 − 1, up to
+  2^53 − 1, no longer throws `std::out_of_range`; `generateBatchId` is SHAKE256 of the molecular
+  hash and index (it was BLAKE2b over the clock). `SignedAtomParity` pins digests printed by the
+  JS SDK for the same inputs.
 
 ### Security
 

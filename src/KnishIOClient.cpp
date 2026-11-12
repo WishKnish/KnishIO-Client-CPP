@@ -536,47 +536,79 @@ KnishIOClient::proposeMolecule(Molecule* molecule,
     });
 }
 
+namespace {
+
+// JS `meta[key] = value` on a plain object: an existing key keeps its position, a new key is appended.
+void setMeta(std::vector<std::pair<std::string, std::string>>& meta, const std::string& key, const std::string& value) {
+    for (auto& entry : meta) {
+        if (entry.first == key) {
+            entry.second = value;
+            return;
+        }
+    }
+    meta.emplace_back(key, value);
+}
+
+std::optional<std::string> metaValue(const std::vector<std::pair<std::string, std::string>>& meta, const std::string& key) {
+    for (const auto& entry : meta) {
+        if (entry.first == key) {
+            return entry.second;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
 // Token operations
 std::future<std::unique_ptr<response::ResponseCreateToken>>
 KnishIOClient::createToken(const std::string& token,
                           double amount,
-                          const std::unordered_map<std::string, std::string>& meta,
+                          const std::vector<std::pair<std::string, std::string>>& meta,
+                          const std::string& batchId,
                           const std::vector<std::string>& units) {
-    return std::async(std::launch::async, [this, token, amount, meta, units]() -> std::unique_ptr<response::ResponseCreateToken> {
+    return std::async(std::launch::async, [this, token, amount, meta, batchId, units]() -> std::unique_ptr<response::ResponseCreateToken> {
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
+        const int mlKem = pImpl_->config.mlKemParameterSet;
 
         // The SOURCE signs at the bundle's LIVE ContinuID position (else the validator rejects
         // "ContinuID chain validation failed"). The recipient is the new token's wallet; the
         // remainder is a fresh chain head (the relay race).
         const std::string bundle = getBundle();
-        Wallet source = continuIdSourceWallet(bundle, 1024);   // no ContinuID -> fresh random (genesis)
-        Wallet recipient(sec, token, "", 64, 1024, pImpl_->config.otsVersion);   // new-token wallet, fresh random position
-        Wallet remainder(sec, "USER", "", 64, 1024, successorOtsVersion(source.ots_version));   // fresh random remainder
+        Wallet source = continuIdSourceWallet(bundle, mlKem);   // no ContinuID -> fresh random (genesis)
+        Wallet recipient(sec, token, "", 64, mlKem, pImpl_->config.otsVersion);   // new-token wallet, fresh random position
+        recipient.batchId = batchId;   // JS: new Wallet({ ..., batchId }) -> C atom batchId + walletBatchId meta
+        Wallet remainder(sec, "USER", "", 64, mlKem, successorOtsVersion(source.ots_version));   // fresh random remainder
 
-        std::vector<std::pair<std::string, std::string>> tokenMeta;
-        tokenMeta.reserve(meta.size() + 3);
-        for (const auto& [k, v] : meta) {
-            tokenMeta.push_back({k, v});
+        // The token meta in the caller's order, then the keys JS KnishIOClient.createToken sets.
+        std::vector<std::pair<std::string, std::string>> tokenMeta = meta;
+        const std::string fungibility = metaValue(meta, "fungibility").value_or("");
+
+        // Stackable: the meta names the batch, the caller's or a fresh one (JS generateBatchId({}))
+        if (fungibility == "stackable") {
+            setMeta(tokenMeta, "batchId", batchId.empty() ? generateSecret(64) : batchId);
         }
 
-        // Stackable / non-fungible: the units ARE the supply (mirror the JS createToken contract):
-        // amount = unit count, splittable + decimals=0, tokenUnits meta = compact [id, name, metas]
-        // triples, a bare id becoming [id, id, {}] (the form every other unit operation sends).
+        // Stackable / non-fungible units ARE the supply (JS createToken): amount = unit count,
+        // splittable + decimals=0, tokenUnits meta = compact [id, name, metas] triples, a bare id
+        // becoming [id, id, {}] (the form every other unit operation sends).
         long long supply = static_cast<long long>(amount);
-        auto fungIt = meta.find("fungibility");
-        const std::string fungibility = (fungIt != meta.end()) ? fungIt->second : "";
         if (!units.empty() &&
             (fungibility == "stackable" || fungibility == "nonfungible" || fungibility == "non-fungible")) {
+            const auto decimals = metaValue(meta, "decimals");
+            if (decimals.has_value() && std::strtod(decimals->c_str(), nullptr) > 0) {
+                throw KnishIOException("Stackable tokens with unit IDs cannot have decimals");
+            }
+            if (amount > 0) {
+                throw KnishIOException("Stackable tokens with unit IDs cannot take an amount");
+            }
             nlohmann::json unitsJson = nlohmann::json::array();
             for (const auto& u : units) unitsJson.push_back(nlohmann::json::array({u, u, nlohmann::json::object()}));
-            tokenMeta.push_back({"splittable", "1"});
-            tokenMeta.push_back({"decimals", "0"});
-            tokenMeta.push_back({"tokenUnits", unitsJson.dump()});
+            setMeta(tokenMeta, "splittable", "1");
+            setMeta(tokenMeta, "decimals", "0");
+            setMeta(tokenMeta, "tokenUnits", unitsJson.dump());
             supply = static_cast<long long>(units.size());
-            if (fungibility == "stackable") {
-                recipient.batchId = generateSecret(64);  // claimable stackable batch (mirror JS)
-            }
         }
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
@@ -584,7 +616,7 @@ KnishIOClient::createToken(const std::string& token,
         mol.remainderWallet = std::make_shared<Wallet>(remainder);
         mol.initTokenCreation(source, recipient, std::to_string(supply), tokenMeta);
 
-        log("INFO", "Creating token: " + token + " amount: " + std::to_string(amount));
+        log("INFO", "Creating token: " + token + " amount: " + std::to_string(supply));
 
         auto proposeResp = submitMolecule(mol);
 
@@ -686,7 +718,7 @@ KnishIOClient::transferToken(const std::string& bundleHash,
         }
 
         // re-derives the registered address from secret+token+position, at the version it was derived at
-        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));
+        Wallet source(sec, token, src.position, 64, pImpl_->config.mlKemParameterSet, bindOwnWalletOtsVersion(token, src.position, src.address));
         source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
         source.tokenUnits = src.tokenUnits;       // stackable units from the Balance response (forward-compat)
 
@@ -702,7 +734,7 @@ KnishIOClient::transferToken(const std::string& bundleHash,
 
         // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - amount); the
         //    validator registers it, advancing the sender's chain.
-        Wallet remainder(sec, token, "", 64, 1024, successorOtsVersion(source.ots_version));
+        Wallet remainder(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
 
         // Stackable (NFT) transfer: partition the source's tokenUnits → source + recipient get the
         // SENT units, remainder gets the KEPT units. No-op for fungible (units empty). Must run
@@ -760,7 +792,7 @@ KnishIOClient::transferTokens(const std::string& token,
         if (srcBalance < total) {
             throw KnishIOException("Insufficient balance for token " + token);
         }
-        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));   // re-derives the registered address
+        Wallet source(sec, token, src.position, 64, pImpl_->config.mlKemParameterSet, bindOwnWalletOtsVersion(token, src.position, src.address));   // re-derives the registered address
         source.balance = src.balance;             // initValues debits the full balance (UTXO)
         source.tokenUnits = src.tokenUnits;
 
@@ -777,7 +809,7 @@ KnishIOClient::transferTokens(const std::string& token,
         }
 
         // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - total)
-        Wallet remainder(sec, token, "", 64, 1024, successorOtsVersion(source.ots_version));
+        Wallet remainder(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
 
         // 4. Stackable (NFT): partition the source's units → source keeps the SENT union, each
         //    recipient its subset, remainder the KEPT. No-op for fungible. Must run before initValues.
@@ -824,20 +856,20 @@ KnishIOClient::burnToken(const std::string& token, double amount, const std::vec
         }
 
         // re-derives the registered address from secret+token+position, at the version it was derived at
-        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));
+        Wallet source(sec, token, src.position, 64, pImpl_->config.mlKemParameterSet, bindOwnWalletOtsVersion(token, src.position, src.address));
         source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
         source.tokenUnits = src.tokenUnits;       // stackable units from the Balance response (forward-compat)
 
         // BURN TARGET: the all-zeros bundle = token destruction. No secret -> no position/address;
         // NO batchId (a batchId would make it a claimable shadow). The validator credits the burn
         // amount to this unspendable bundle, satisfying conservation while destroying the tokens.
-        Wallet burnWallet(sec, token, "", 64, 1024, source.ots_version);
+        Wallet burnWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);
         burnWallet.bundle = "0000000000000000000000000000000000000000000000000000000000000000";
         burnWallet.address = "";
         burnWallet.position = "";
 
         // REMAINDER: a fresh same-token wallet holding (balance - amount).
-        Wallet remainder(sec, token, "", 64, 1024, successorOtsVersion(source.ots_version));
+        Wallet remainder(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
 
         // Stackable (NFT) burn: partition the source's tokenUnits → source keeps the BURNED units,
         // remainder keeps the rest (no recipient — the units are destroyed). No-op for fungible.
@@ -878,14 +910,14 @@ KnishIOClient::depositBufferToken(const std::string& token, double amount,
             throw KnishIOException("Insufficient balance for token " + token);
         }
 
-        Wallet source(sec, token, src.position, 64, 1024, bindOwnWalletOtsVersion(token, src.position, src.address));   // re-derives the registered address
+        Wallet source(sec, token, src.position, 64, pImpl_->config.mlKemParameterSet, bindOwnWalletOtsVersion(token, src.position, src.address));   // re-derives the registered address
         source.balance = src.balance;             // initDepositBuffer debits the full balance (UTXO)
 
         // BUFFER: a FRESH same-token wallet that receives the deposited amount (B-isotope).
-        Wallet buffer(sec, token, "", 64, 1024, successorOtsVersion(source.ots_version));
+        Wallet buffer(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
 
         // REMAINDER: a FRESH same-token wallet holding (balance - amount).
-        Wallet remainder(sec, token, "", 64, 1024, successorOtsVersion(source.ots_version));
+        Wallet remainder(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
 
         // V-B-V buffer-deposit molecule (NO ContinuID I-atom).
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));
@@ -1233,25 +1265,9 @@ std::string KnishIOClient::generateSecret(const std::string& seed, size_t length
     return shake256Hex(seed, bits);
 }
 
-std::string KnishIOClient::generateBatchId(const Molecule& molecule) {
-    // Generate batch ID based on molecule properties
-    std::string source = molecule.molecularHash + 
-                        std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-    
-    // Hash the source to create batch ID
-    std::vector<unsigned char> hash(32);
-    crypto_generichash(hash.data(), hash.size(),
-                      reinterpret_cast<const unsigned char*>(source.data()),
-                      source.size(), nullptr, 0);
-    
-    // Convert to hex
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (unsigned char byte : hash) {
-        oss << std::setw(2) << static_cast<int>(byte);
-    }
-    
-    return oss.str();
+std::string KnishIOClient::generateBatchId(const std::string& molecularHash, long long index) {
+    // JS crypto.js generateBatchId: generateBundleHash(String(molecularHash) + String(index))
+    return shake256Hex(molecularHash + std::to_string(index), 256);
 }
 
 std::string KnishIOClient::getVersion() noexcept {
@@ -1271,21 +1287,6 @@ std::string KnishIOClient::getRandomUri() const {
     // Select random URI for load balancing
     std::uniform_int_distribution<size_t> dist(0, pImpl_->config.uris.size() - 1);
     return pImpl_->config.uris[dist(pImpl_->rng)];
-}
-
-std::string KnishIOClient::hashSecret(const std::string& secret) const {
-    std::vector<unsigned char> hash(32);
-    crypto_generichash(hash.data(), hash.size(),
-                      reinterpret_cast<const unsigned char*>(secret.data()),
-                      secret.size(), nullptr, 0);
-    
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (unsigned char byte : hash) {
-        oss << std::setw(2) << static_cast<int>(byte);
-    }
-    
-    return oss.str();
 }
 
 void KnishIOClient::log(const std::string& level, const std::string& message) const {

@@ -456,6 +456,29 @@ set_tests_properties(MoleculeCheckRules PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:molecule_check_rules>
 )
 
+# Signed atoms equal the JS reference: digest literals printed by the JS SDK for pinned inputs
+# (token creation, shadow-wallet claim, a 2^53-1 transfer, authorization, batch id), plus the
+# molecules createToken and requestAuthToken send to the loopback stub validator. No network.
+add_executable(signed_atom_parity signed_atom_parity.cpp)
+target_link_libraries(signed_atom_parity
+    PRIVATE knishio-client-cpp
+    PRIVATE Threads::Threads
+)
+target_compile_features(signed_atom_parity PRIVATE cxx_std_20)
+set_target_properties(signed_atom_parity PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+add_test(
+    NAME SignedAtomParity
+    COMMAND signed_atom_parity
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_tests_properties(SignedAtomParity PROPERTIES
+    LABELS "molecule;vectors;parity;unit"
+    TIMEOUT 120
+    REQUIRED_FILES $<TARGET_FILE:signed_atom_parity>
+)
+
 # Secret Storage envelope encryption tests
 add_executable(test_secret_storage test_secret_storage.cpp)
 target_link_libraries(test_secret_storage

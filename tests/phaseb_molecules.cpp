@@ -303,7 +303,7 @@ void createTokenUnitsVectors(const json& vectors) {
         const std::string name = tv.at("name").get<std::string>();
         const std::string token = tv.at("token").get<std::string>();
         Session s;
-        auto resp = s.client->createToken(token, 0, {{"fungibility", "stackable"}},
+        auto resp = s.client->createToken(token, 0, {{"fungibility", "stackable"}}, "",
                                           tv.at("units").get<std::vector<std::string>>()).get();
         const auto sent = s.built();
         // submitMolecule runs Molecule::check first and sends nothing when it throws.

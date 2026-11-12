@@ -163,8 +163,9 @@ std::vector<Atom> Molecule::initValue(const Wallet &sourceWallet, const Wallet &
 		remainderMeta.push_back({"tokenUnits", remainderWallet.getTokenUnitsJson()});
 	}
 
-	// Always add remainder atom (JavaScript canonical UTXO pattern)
-	auto remainderAmount = std::stoi(sourceWallet.balance) - std::stoi(value);
+	// Always add remainder atom (JavaScript canonical UTXO pattern). 64-bit: an amount above
+	// INT32_MAX (up to 2^53 - 1, the canonical large_i64 vector) must not overflow.
+	auto remainderAmount = std::stoll(sourceWallet.balance) - std::stoll(value);
 	this->atoms.push_back
 	(
 		Atom(remainderWallet.position,
@@ -430,7 +431,7 @@ std::vector<Atom> Molecule::initTokenCreation(const Wallet &sourceWallet, const 
 			"C",
 			sourceWallet.token,
 			amount,
-			"",  // batchId - empty (JS recipientWallet.batchId is null -> hash-skipped)
+			recipientWallet.batchId,  // JS initTokenCreation: batchId = recipientWallet.batchId (empty -> hash-skipped)
 			"token",
 			recipientWallet.token,
 			finalMeta,
@@ -605,9 +606,10 @@ std::vector<Atom> Molecule::initMeta(const Wallet &wallet, const std::vector<std
 
 /**
  * Builds Atoms to request an authorization token (U isotope + ContinuID), mirroring JS
- * Molecule.initAuthorization(). The U-atom carries meta [encrypt, pubkey, characters]; the
- * validator extracts the pubkey from the U-atom's walletAddress and issues a bundle-scoped JWT
- * (U-isotope is OTS-exempt at the validator, but the molecular hash is still verified).
+ * Molecule.initAuthorization() as KnishIOClient.requestAuthToken fills it. The U-atom carries meta
+ * [encrypt, walletPubkey] (walletPubkey only for a wallet with an ML-KEM key); the validator
+ * issues a bundle-scoped JWT (U-isotope is OTS-exempt at the validator, but the molecular hash is
+ * still verified).
  *
  * @param {Wallet} sourceWallet - the signing wallet: a fresh AUTH wallet, or the USER wallet at the
  *        bundle's ContinuID pointer for a proven re-login
@@ -617,17 +619,16 @@ std::vector<Atom> Molecule::initAuthorization(const Wallet &sourceWallet, bool e
 {
 	this->molecularHash.clear();
 
-	// U-atom meta in JS order: encrypt first, then pubkey + characters (setAtomWallet).
+	// U-atom meta exactly as JS builds it: { encrypt, walletPubkey }. setAtomWallet adds nothing for
+	// a wallet without token units or trade rates.
 	std::vector<std::pair<std::string, std::string>> uMeta;
 	uMeta.push_back({"encrypt", encrypt ? "true" : "false"});
 	if (!sourceWallet.mlkem_public_key.empty()) {
-		uMeta.push_back({"pubkey", toBase64(sourceWallet.mlkem_public_key)});
 		// PQ-transport Phase E: convey the source wallet's ML-KEM public key as a SIGNED
 		// walletPubkey meta (this U-atom is signed → MITM-proof), so the validator's
 		// extract_enc_pubkey can encrypt CipherHash responses back to THIS wallet.
 		uMeta.push_back({"walletPubkey", toBase64(sourceWallet.mlkem_public_key)});
 	}
-	uMeta.push_back({"characters", "BASE64"});
 
 	// Authorization atom (U isotope) — no value, no metaType/metaId.
 	this->atoms.push_back
@@ -726,7 +727,7 @@ std::vector<Atom> Molecule::initWalletCreation(const Wallet &sourceWallet, const
 			"C",
 			sourceWallet.token,
 			"",  // No value for wallet creation
-			"",  // batchId - empty (JS wallet.batchId is null -> hash-skipped)
+			wallet.batchId,  // JS initWalletCreation: batchId = wallet.batchId (a shadow-wallet claim carries it)
 			"wallet",
 			wallet.address,
 			finalMeta,
@@ -933,7 +934,7 @@ std::string Molecule::toJson() const
 		sourceWalletJson["address"] = sourceWallet->address;
 		sourceWalletJson["position"] = sourceWallet->position;
 		sourceWalletJson["token"] = sourceWallet->token;
-		sourceWalletJson["balance"] = sourceWallet->balance.empty() ? 0 : std::stoi(sourceWallet->balance);
+		sourceWalletJson["balance"] = sourceWallet->balance.empty() ? 0LL : std::stoll(sourceWallet->balance);
 		jsonMolecule["sourceWallet"] = sourceWalletJson;
 	}
 	

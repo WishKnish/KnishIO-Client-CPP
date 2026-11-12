@@ -1177,7 +1177,7 @@ private:
             for (const auto& tv : v.at("create_token_units").at("tests")) {
                 const std::string name = tv.at("name").get<std::string>();
                 knishio_test::Session session;
-                (void)session.client->createToken(tv.at("token").get<std::string>(), 0, {{"fungibility", "stackable"}},
+                (void)session.client->createToken(tv.at("token").get<std::string>(), 0, {{"fungibility", "stackable"}}, "",
                                                   tv.at("units").get<std::vector<std::string>>()).get();
                 const auto sent = session.built();
                 bool ok = sent.size() == 1;

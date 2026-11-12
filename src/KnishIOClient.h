@@ -6,7 +6,7 @@
 #include <chrono>
 #include <future>
 #include <optional>
-#include <unordered_map>
+#include <utility>
 #include <random>
 #include <functional>
 #include "TokenUnit.h"
@@ -220,16 +220,21 @@ public:
     // Token operations
     
     /**
-     * Create a new token type
+     * Create a new token type (mirrors JS createToken)
      * @param token The token slug
-     * @param amount Initial amount to create
-     * @param meta Optional metadata for the token
+     * @param amount Initial amount to create (0 when units are given)
+     * @param meta Token metadata, hashed in this order (e.g. name, fungibility, supply)
+     * @param batchId Batch id, set on the new token's wallet (the C atom batchId and its
+     *                walletBatchId meta) and, for a stackable token, as the `batchId` meta; a
+     *                stackable token without one gets a fresh `batchId` meta only (as JS does)
+     * @param units Stackable / non-fungible unit ids; the supply is then their count
      * @return Future containing the creation response
      */
     [[nodiscard]] std::future<std::unique_ptr<response::ResponseCreateToken>>
     createToken(const std::string& token,
                 double amount,
-                const std::unordered_map<std::string, std::string>& meta = {},
+                const std::vector<std::pair<std::string, std::string>>& meta = {},
+                const std::string& batchId = "",
                 const std::vector<std::string>& units = {});
     
     /**
@@ -430,11 +435,13 @@ public:
     [[nodiscard]] static std::string generateSecret(const std::string& seed, size_t length = 2048);
     
     /**
-     * Generate a batch ID for grouped operations
-     * @param molecule The molecule to generate batch ID for
-     * @return Generated batch ID
+     * Deterministic batch id of a molecule's atom (JS generateBatchId({ molecularHash, index })):
+     * the 64-hex SHAKE256-256 digest of molecularHash followed by the decimal index.
+     * @param molecularHash The molecule's molecular hash
+     * @param index The atom index
+     * @return The batch id
      */
-    [[nodiscard]] static std::string generateBatchId(const KnishIO::Molecule& molecule);
+    [[nodiscard]] static std::string generateBatchId(const std::string& molecularHash, long long index);
     
     /**
      * Get SDK version information
@@ -449,7 +456,6 @@ private:
     
     // Internal helper methods
     [[nodiscard]] std::string getRandomUri() const;
-    [[nodiscard]] std::string hashSecret(const std::string& secret) const;
     void log(const std::string& level, const std::string& message) const;
     void ensureAuthenticated() const;
     void validateConfig() const;
