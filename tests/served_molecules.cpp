@@ -3,7 +3,7 @@
 // Reads tests/fixtures/served-molecules.json (molecules exactly as a validator's GraphQL API
 // serves them) and tests/fixtures/version4-hash-vectors.json (client-format atoms, the exact
 // view JSON hashed and the expected base17 hash). Both are vendored copies of the masters in
-// the monorepo's sdks/shared-test-results/. A missing file exits 77 (CTest: skipped).
+// the monorepo's sdks/shared-test-results/. A missing file fails the test.
 
 #include <cstdlib>
 #include <fstream>
@@ -171,8 +171,8 @@ int main() {
     json vectors;
     if (!load(fixturePath("KNISHIO_SERVED_MOLECULES", KNISHIO_SERVED_MOLECULES_PATH), served)
         || !load(fixturePath("KNISHIO_VERSION4_VECTORS", KNISHIO_VERSION4_VECTORS_PATH), vectors)) {
-        std::cout << "SKIP: served-molecules.json or version4-hash-vectors.json not found" << std::endl;
-        return 77;
+        std::cout << "FAIL: served-molecules.json or version4-hash-vectors.json not found" << std::endl;
+        return 1;
     }
     servedCases(served);
     createdAtCases();

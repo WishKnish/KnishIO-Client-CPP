@@ -26,6 +26,12 @@ substantiate a detail, the entry says so instead of guessing.
   in both the pure build and the `KNISHIO_USE_KCORE=ON` build (CI `gate` and `gate-kcore`); a
   missing fixture fails the test.
 
+### Changed
+
+- `OtsV2Vectors` reads the vendored `tests/fixtures/ots-v2-vectors.json` (it read the monorepo
+  master, which a standalone checkout does not have, so CI reported it skipped) and fails when the
+  file is missing. `ServedMolecules` also fails instead of skipping when a fixture is missing.
+
 ### Security
 
 - The reply to a request the client sent in the `CipherHash` envelope is accepted only if it is an

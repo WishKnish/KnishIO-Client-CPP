@@ -10,8 +10,7 @@
  *     detection, Wallet::setOtsVersion, and the wallets a client signs from, against the loopback
  *     stub validator (tests/loopback_validator.h).
  *   - `vectors` (OtsV2Vectors): the shared OTS v2 vectors, read from KNISHIO_OTS_V2_VECTORS or
- *     ../shared-test-results/ots-v2-vectors.json. A standalone checkout has no such file; the
- *     test then prints SKIP and exits 77, which CTest reports as skipped.
+ *     the vendored tests/fixtures/ots-v2-vectors.json. A missing file is a failure.
  */
 #include <cctype>
 #include <cstdlib>
@@ -474,7 +473,7 @@ std::string vectorsPath() {
 #ifdef KNISHIO_OTS_V2_VECTORS_PATH
     return KNISHIO_OTS_V2_VECTORS_PATH;
 #else
-    return "../shared-test-results/ots-v2-vectors.json";
+    return "fixtures/ots-v2-vectors.json";
 #endif
 }
 
@@ -491,8 +490,8 @@ int runVectors() {
     const std::string path = vectorsPath();
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cout << "SKIP: ots-v2-vectors.json not found (standalone checkout)" << std::endl;
-        return 77;
+        std::cout << "FAIL: ots-v2-vectors.json not found at " << path << std::endl;
+        return 1;
     }
     const json vectors = json::parse(file).at("vectors");
     const json& keyTests = vectors.at("key_derivation").at("tests");
@@ -605,7 +604,7 @@ int main(int argc, char** argv) {
     } else {
         rc = runRoundTrip();
     }
-    if (rc == 77) {
+    if (rc != 0 && failures == 0) {
         return rc;
     }
     std::cout << std::endl;

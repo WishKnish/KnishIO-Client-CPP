@@ -215,9 +215,9 @@ set_tests_properties(WotsSignatureParity PROPERTIES
     REQUIRED_FILES $<TARGET_FILE:wots_signature_parity>
 )
 
-# OTS v2 (64-chain WOTS+). OtsV2RoundTrip always runs. OtsV2Vectors reads the shared OTS v2
-# vectors from the monorepo (KNISHIO_OTS_V2_VECTORS overrides the path); a standalone checkout
-# has none, so the binary exits 77 and CTest reports the entry as skipped.
+# OTS v2 (64-chain WOTS+). OtsV2RoundTrip always runs. OtsV2Vectors reads the vendored copy of the
+# shared OTS v2 vectors in tests/fixtures/ (KNISHIO_OTS_V2_VECTORS overrides the path); a missing
+# or unreadable file fails the test.
 add_executable(ots_v2_vectors ots_v2_vectors.cpp)
 target_link_libraries(ots_v2_vectors
     PRIVATE knishio-client-cpp
@@ -225,7 +225,7 @@ target_link_libraries(ots_v2_vectors
 )
 target_compile_features(ots_v2_vectors PRIVATE cxx_std_20)
 target_compile_definitions(ots_v2_vectors PRIVATE
-    KNISHIO_OTS_V2_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../shared-test-results/ots-v2-vectors.json"
+    KNISHIO_OTS_V2_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ots-v2-vectors.json"
 )
 set_target_properties(ots_v2_vectors PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
@@ -248,7 +248,6 @@ add_test(
 set_tests_properties(OtsV2Vectors PROPERTIES
     LABELS "crypto;signature;vectors;ots"
     TIMEOUT 120
-    SKIP_RETURN_CODE 77
     REQUIRED_FILES $<TARGET_FILE:ots_v2_vectors>
 )
 
@@ -286,7 +285,7 @@ set_tests_properties(kcore_parity_vectors PROPERTIES
 
 # Served-molecule verification (Molecule::verifyFromServerData) and the shared Version4 hash
 # vectors, read from the vendored copies in tests/fixtures/ (KNISHIO_SERVED_MOLECULES and
-# KNISHIO_VERSION4_VECTORS override the paths); a missing file exits 77 (skipped).
+# KNISHIO_VERSION4_VECTORS override the paths); a missing file fails the test.
 add_executable(served_molecules served_molecules.cpp)
 target_link_libraries(served_molecules
     PRIVATE knishio-client-cpp
@@ -308,7 +307,6 @@ add_test(
 set_tests_properties(ServedMolecules PROPERTIES
     LABELS "molecule;served;vectors"
     TIMEOUT 120
-    SKIP_RETURN_CODE 77
     REQUIRED_FILES $<TARGET_FILE:served_molecules>
 )
 
