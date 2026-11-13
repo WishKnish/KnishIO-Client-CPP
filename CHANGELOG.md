@@ -16,6 +16,15 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-11-12
+
+### Upgrade notes
+
+- `KnishIOClient::createToken` takes a different argument list, `generateBatchId` replaces the old
+  batch-ID helper, and `createMolecule` returns `std::unique_ptr<Molecule>` (see Changed).
+- A reply to a request sent in the CipherHash envelope is accepted only as an encrypted envelope; a
+  plaintext reply now fails (see Security).
+
 ### Added
 
 - Test `kcore_parity_vectors` (`tests/kcore_parity_vectors.cpp`) reads the shared kcore parity
@@ -626,7 +635,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.2.1...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.3.0...HEAD
+[2.3.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.3.0
 [2.2.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.2.1
 [2.2.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.2.0
 [2.1.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.1.0
