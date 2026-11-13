@@ -42,6 +42,10 @@ substantiate a detail, the entry says so instead of guessing.
 - `README.md` documents the API the headers declare (its examples compile against the installed
   headers; it named methods and headers that do not exist) and lists the JS operations this SDK
   does not implement.
+- `-DKNISHIO_USE_KCORE=ON` requires KnishIO-Crypto-Core 0.2.1 or a later 0.x release (`find_package`
+  minimum was 0.2.0); CI and the release builds link the sha256-pinned 0.2.1 packages. Crypto-Core
+  0.2.1 zeroes ML-KEM secrets, WOTS+ chain preimages and Keccak state on the stack before each call
+  returns. Outputs and the ABI are unchanged.
 
 ### Removed
 

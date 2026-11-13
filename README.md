@@ -82,13 +82,13 @@ The ML-KEM (FIPS 203) implementation, providing both ML-KEM-768 and ML-KEM-1024,
    ```
 
 5. Use the KnishIO Crypto Core (optional). With `-DKNISHIO_USE_KCORE=ON` the SDK links
-   kcore 0.2.0 statically and routes WOTS+ chains, wallet addresses (v1 and v2) and
+   kcore 0.2.1 statically and routes WOTS+ chains, wallet addresses (v1 and v2) and
    ML-KEM-1024/768 through it. Point `CMAKE_PREFIX_PATH` at an extracted
-   `knishio-crypto-core-0.2.0-<platform>` package; configure prints
-   `kcore: KnishIOCryptoCore 0.2.0`. Inputs kcore does not accept (anything
+   `knishio-crypto-core-0.2.1-<platform>` package; configure prints
+   `kcore: KnishIOCryptoCore 0.2.1`. Inputs kcore does not accept (anything
    but lowercase hex of the exact length) run the SDK's own code, so results are identical.
    ```bash
-   cmake -S . -B build -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=/path/to/knishio-crypto-core-0.2.0-linux-arm64-gnu
+   cmake -S . -B build -DKNISHIO_USE_KCORE=ON -DCMAKE_PREFIX_PATH=/path/to/knishio-crypto-core-0.2.1-linux-arm64-gnu
    ```
 
    The prebuilt `knishio-client-cpp-<version>-<platform>.tar.gz` packages on the GitHub Releases

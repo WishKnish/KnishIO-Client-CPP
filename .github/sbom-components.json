@@ -17,14 +17,14 @@
       "type": "library",
       "group": "WishKnish",
       "name": "KnishIO-Crypto-Core",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "licenses": [{"license": {"id": "GPL-3.0-or-later"}}],
       "externalReferences": [
         {"type": "vcs", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core"},
-        {"type": "distribution", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.0/knishio-crypto-core-0.2.0-linux-x64-gnu.tar.gz",
-         "hashes": [{"alg": "SHA-256", "content": "137a7adb73df0a1fe84656cf02d8e6513a6dec0a548ed9adc7c220dac71e4b05"}]},
-        {"type": "distribution", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.0/knishio-crypto-core-0.2.0-darwin-universal.tar.gz",
-         "hashes": [{"alg": "SHA-256", "content": "a482d979d48c1dfb8ce3d8528795e217a3e304f8c5eeed363097067d67746329"}]}
+        {"type": "distribution", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.1/knishio-crypto-core-0.2.1-linux-x64-gnu.tar.gz",
+         "hashes": [{"alg": "SHA-256", "content": "0cab0482b62db7d1d755472daefbed7399d305d3f04056ac1abb62964d4c435e"}]},
+        {"type": "distribution", "url": "https://github.com/WishKnish/KnishIO-Crypto-Core/releases/download/0.2.1/knishio-crypto-core-0.2.1-darwin-universal.tar.gz",
+         "hashes": [{"alg": "SHA-256", "content": "bfd7e0972c2b2b4367abfff6518d2bf09c1f8ed8d5b4a8eb83e1e15094f19170"}]}
       ],
       "properties": [
         {"name": "knishio:verify:contains", "value": ".github/workflows/publish.yml"},
