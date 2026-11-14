@@ -16,6 +16,31 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+### Added
+
+- `Wallet::createShadow(bundle, token = "USER", batchId = {}, mlkemParameterSet = 1024,
+  otsVersion = 1)` builds a wallet for a bundle whose secret the client does not hold: it sets the
+  bundle, token, batch id, ML-KEM parameter set and OTS version and derives no key, position,
+  address, NaCl or ML-KEM keypair (JS `Wallet.create` without a secret). An empty bundle, a
+  parameter set other than 768 or 1024, or an OTS version other than 1 or 2 throws
+  `std::invalid_argument`.
+
+### Changed
+
+- The recipient wallets of `transferToken`, `transferTokens`, `burnToken` (the all-zeros burn
+  target), `withdrawBufferToken` and `fuseToken` to another bundle no longer derive a full key
+  (WOTS+ key and address, NaCl and ML-KEM keypairs) from the sender's secret only to clear its
+  position and address; they are `Wallet::createShadow` wallets. The proposed molecules are byte
+  for byte the same (test `ClientOperations` pins their molecular hashes).
+
+### Security
+
+- `KnishIOClient::setSecret` left the replaced secret in memory: a shorter new secret was copied
+  over the old one, leaving its tail in the buffer until it was freed, and a longer one freed the
+  old buffer without wiping it. It now wipes the stored secret before replacing it (an argument
+  that aliases the stored secret is copied first). It also no longer derives an unused USER wallet
+  from every secret it is given (the `authWallet` member is removed).
+
 ## [2.3.0] — 2026-11-12
 
 ### Upgrade notes

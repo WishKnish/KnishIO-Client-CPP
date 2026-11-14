@@ -31,7 +31,6 @@ public:
     Config config;
     std::optional<std::string> secret;
     std::optional<std::string> bundle;
-    std::unique_ptr<Wallet> authWallet;
     std::unique_ptr<http::GraphQLClient> httpClient;
     std::optional<std::string> authToken;
     mutable std::mt19937 rng{std::random_device{}()};
@@ -165,14 +164,17 @@ void KnishIOClient::setSecret(const std::string& secret) {
     }
 
     // Any non-empty string is a secret (JS setSecret): a non-hex secret, e.g. a passphrase, is
-    // hashed by Wallet::generateWalletKey before key derivation.
-    pImpl_->secret = secret;
-    
-    // Generate wallet from secret
-    pImpl_->authWallet = std::make_unique<Wallet>(secret, "USER", "", 64, pImpl_->config.mlKemParameterSet, pImpl_->config.otsVersion);
-    pImpl_->bundle = Wallet::generateBundleHash(secret);
-    
-    log("DEBUG", "Secret set and wallet initialized");
+    // hashed by Wallet::generateWalletKey before key derivation. The argument may alias the stored
+    // secret, so it is copied before the stored bytes are wiped (as ~Impl wipes them).
+    std::string next(secret);
+    std::string nextBundle = Wallet::generateBundleHash(next);
+    if (pImpl_->secret.has_value()) {
+        sodium_memzero(pImpl_->secret->data(), pImpl_->secret->size());
+    }
+    pImpl_->secret = std::move(next);
+    pImpl_->bundle = std::move(nextBundle);
+
+    log("DEBUG", "Secret set");
 }
 
 bool KnishIOClient::hasSecret() const noexcept {
@@ -737,11 +739,7 @@ KnishIOClient::transferToken(const std::string& bundleHash,
         //    position/address; identified by bundle + token + batchId). The validator's recipient
         //    path keys off metaId(=bundle) + batchId; the empty address/position are ignored on the
         //    shadow branch, and a fresh recipient REQUIRES the batchId.
-        Wallet recipient(sec, token);
-        recipient.bundle = bundleHash;
-        recipient.address = "";
-        recipient.position = "";
-        recipient.batchId = batchId;   // -> recipient V-atom batchId; validator creates a claimable shadow
+        Wallet recipient = Wallet::createShadow(bundleHash, token, batchId, pImpl_->config.mlKemParameterSet);
 
         // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - amount); the
         //    validator registers it, advancing the sender's chain.
@@ -811,12 +809,7 @@ KnishIOClient::transferTokens(const std::string& token,
         std::vector<Wallet> recipientWallets;
         recipientWallets.reserve(recipients.size());
         for (const auto& r : recipients) {
-            Wallet recipient(sec, token);
-            recipient.bundle = r.bundleHash;
-            recipient.address = "";
-            recipient.position = "";
-            recipient.batchId = r.batchId;   // -> recipient V-atom batchId; validator creates a claimable shadow
-            recipientWallets.push_back(recipient);
+            recipientWallets.push_back(Wallet::createShadow(r.bundleHash, token, r.batchId, pImpl_->config.mlKemParameterSet));
         }
 
         // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - total)
@@ -874,10 +867,8 @@ KnishIOClient::burnToken(const std::string& token, double amount, const std::vec
         // BURN TARGET: the all-zeros bundle = token destruction. No secret -> no position/address;
         // NO batchId (a batchId would make it a claimable shadow). The validator credits the burn
         // amount to this unspendable bundle, satisfying conservation while destroying the tokens.
-        Wallet burnWallet(sec, token, "", 64, pImpl_->config.mlKemParameterSet, source.ots_version);
-        burnWallet.bundle = "0000000000000000000000000000000000000000000000000000000000000000";
-        burnWallet.address = "";
-        burnWallet.position = "";
+        Wallet burnWallet = Wallet::createShadow("0000000000000000000000000000000000000000000000000000000000000000",
+                                                 token, "", pImpl_->config.mlKemParameterSet, source.ots_version);
 
         // REMAINDER: a fresh same-token wallet holding (balance - amount).
         Wallet remainder(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
@@ -973,11 +964,8 @@ KnishIOClient::withdrawBufferToken(const std::string& token, double amount, cons
 
         // RECIPIENT: the caller's OWN bundle (JS: recipients = { getBundle(): amount }), addressless; a
         // fresh batch id only when S has one.
-        Wallet recipient(sec, token, "", 64, mlKem);
-        recipient.bundle = senderBundle;
-        recipient.address = "";
-        recipient.position = "";
-        recipient.batchId = source->batchId.empty() ? std::string() : generateSecret(64);
+        Wallet recipient = Wallet::createShadow(senderBundle, token,
+                                                source->batchId.empty() ? std::string() : generateSecret(64), mlKem);
 
         // REMAINDER: a FRESH position (S.createRemainder): value credited at S's consumed signing
         // position would be stranded, and validator 0.6.1 rejects it.
@@ -1060,12 +1048,9 @@ KnishIOClient::fuseToken(const std::string& bundleHash, const std::string& token
         source.tokenUnits = src.tokenUnits;
 
         // RECIPIENT of the new unit: a fresh own wallet, or the addressless wallet of another bundle.
-        Wallet recipient(sec, tokenSlug, "", 64, mlKem, pImpl_->config.otsVersion);
-        if (bundleHash != senderBundle) {
-            recipient.bundle = bundleHash;
-            recipient.address = "";
-            recipient.position = "";
-        }
+        Wallet recipient = bundleHash == senderBundle
+            ? Wallet(sec, tokenSlug, "", 64, mlKem, pImpl_->config.otsVersion)
+            : Wallet::createShadow(bundleHash, tokenSlug, "", mlKem, pImpl_->config.otsVersion);
         Wallet remainder(sec, tokenSlug, "", 64, mlKem, successorOtsVersion(source.ots_version));
 
         Molecule mol(pImpl_->config.cellSlug.value_or(std::string{}));

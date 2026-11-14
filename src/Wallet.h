@@ -15,6 +15,13 @@ public:
 	Wallet(const std::string &secret, const std::string &token = "USER", const std::string &position = {}, size_t saltLength = 64, int mlkemParameterSet = 1024, int otsVersion = 1);
 	~Wallet();
 
+	// A wallet for a bundle whose secret this client does not hold: a transfer recipient, the burn
+	// target. Sets only bundle, token, batch id, ML-KEM parameter set and OTS version; derives no
+	// key, position, address, NaCl or ML-KEM keypair (JS Wallet.create without a secret). Throws
+	// std::invalid_argument for an empty bundle, a parameter set other than 768 or 1024, or an OTS
+	// version other than 1 or 2.
+	static Wallet createShadow(const std::string &bundle, const std::string &token = "USER", const std::string &batchId = {}, int mlkemParameterSet = 1024, int otsVersion = 1);
+
 	bool generateMyPublicAndPrivateKeys();
 	std::string decryptMyMessage(const std::string &message);
 
@@ -30,6 +37,10 @@ public:
 	std::string mlkemDecryptToString(const std::map<std::string, std::string>& encrypted_data);
 
 private:
+	// createShadow's constructor: sets the given fields, derives nothing.
+	struct ShadowTag {};
+	Wallet(ShadowTag, const std::string &bundle, const std::string &token, const std::string &batchId, int mlkemParameterSet, int otsVersion);
+
 	// A derived ML-KEM identity. The 64-byte d‖z seed this wallet's key produces takes no
 	// parameter-set input, so BOTH the ML-KEM-768 and the ML-KEM-1024 identity are derivable
 	// from material the wallet already holds. The private key is zeroized when the value

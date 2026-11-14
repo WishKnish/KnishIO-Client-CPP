@@ -49,6 +49,26 @@ Wallet::Wallet(const std::string &secret, const std::string &token, const std::s
 	initializeMLKEM(this->mlkem_parameter_set);
 }
 
+Wallet Wallet::createShadow(const std::string &bundle, const std::string &token, const std::string &batchId, int mlkemParameterSet, int otsVersion)
+{
+	if (bundle.empty()) {
+		throw std::invalid_argument("KnishIO: a shadow wallet needs a bundle.");
+	}
+	if (mlkemParameterSet != 768 && mlkemParameterSet != 1024) {
+		throw std::invalid_argument("KnishIO: unsupported ML-KEM parameter set " + std::to_string(mlkemParameterSet) + "; expected 1024 or 768.");
+	}
+	return Wallet(ShadowTag{}, bundle, token, batchId, mlkemParameterSet, Wallet::checkedOtsVersion(otsVersion));
+}
+
+Wallet::Wallet(ShadowTag, const std::string &bundle, const std::string &token, const std::string &batchId, int mlkemParameterSet, int otsVersion)
+	: token(token)
+	, batchId(batchId)
+	, bundle(bundle)
+	, mlkem_parameter_set(mlkemParameterSet)
+	, ots_version(otsVersion)
+{
+}
+
 Wallet::~Wallet()
 {
 	// SECURITY: Securely clear all cryptographic materials from memory
