@@ -108,6 +108,9 @@ public:
             curl_easy_cleanup(handle);
         }
         curlHandles.clear();
+        if (authToken) {
+            sodium_memzero(authToken->data(), authToken->size());
+        }
     }
     
     CURL* getCurlHandle() {
@@ -314,6 +317,7 @@ curl_slist* GraphQLClient::setupRequestHeaders(CURL* curl, const Request& reques
     if (pImpl_->authToken.has_value()) {
         std::string authHeader = "X-Auth-Token: " + pImpl_->authToken.value();
         headers = curl_slist_append(headers, authHeader.c_str());
+        sodium_memzero(authHeader.data(), authHeader.size());
     }
     
     // Add custom headers
@@ -407,9 +411,15 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, pImpl_->verifySSL ? 2L : 0L);
     
     // Set headers. The list lives until the request is done; the pooled handle then forgets it
-    // and the list is freed (it leaked on every request before).
+    // and the list is freed (it leaked on every request before). Each header string is wiped
+    // first: one of them carries the auth token.
     auto headersCleanup = [curl](curl_slist* list) {
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
+        for (curl_slist* item = list; item != nullptr; item = item->next) {
+            if (item->data != nullptr) {
+                sodium_memzero(item->data, std::strlen(item->data));
+            }
+        }
         curl_slist_free_all(list);
     };
     std::unique_ptr<curl_slist, decltype(headersCleanup)> headers(setupRequestHeaders(curl, request), headersCleanup);
@@ -483,6 +493,9 @@ GraphQLClient::Response GraphQLClient::executeInternal(const Request& request) {
 }
 
 void GraphQLClient::setAuthToken(const std::string& token) {
+    if (pImpl_->authToken) {
+        sodium_memzero(pImpl_->authToken->data(), pImpl_->authToken->size());
+    }
     pImpl_->authToken = token;
 }
 

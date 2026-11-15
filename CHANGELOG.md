@@ -16,6 +16,30 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+### Added
+
+- CMake option `KNISHIO_ENABLE_SANITIZERS` (default `OFF`) builds every target, the tests
+  included, with AddressSanitizer and UndefinedBehaviorSanitizer (`-fsanitize=address
+  -fsanitize=undefined`, compile and link) under GCC, Clang and AppleClang; any other compiler
+  stops the configure with an error.
+
+### Fixed
+
+- `KnishIOClient::transferToken` and `transferTokens` dropped the source wallet's batch id: the
+  source and remainder atoms carried none, and a recipient without a caller batch id got none.
+  The source now takes the batch id of the Balance response, the remainder keeps it, and a
+  recipient gets the caller's batch id or, when the source has one, a fresh 64-character id (one
+  per recipient in `transferTokens`), as JS does. Transfers of a stackable (batched) token now
+  sign different bytes than before; fungible transfers are unchanged. Test `ClientOperations`
+  pins both molecular hashes to the JS SDK's.
+
+### Security
+
+- The auth token was left in freed memory: `KnishIOClient` replaced its stored token and dropped
+  its local copy without wiping them, and `GraphQLClient` did not wipe the token it replaced in
+  `setAuthToken`, the one it held when destroyed, or the `X-Auth-Token` header strings of each
+  request. Every one of these copies is now wiped with `sodium_memzero` before it is freed.
+
 ## [2.3.1] — 2026-11-13
 
 ### Added

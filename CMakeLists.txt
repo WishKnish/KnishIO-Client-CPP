@@ -34,6 +34,7 @@ endif()
 # the publish workflow sets it OFF to produce portable release artifacts.
 option(KNISHIO_NATIVE_ARCH "Optimize for the build host's CPU (-march=native). Turn OFF for distributable binaries." ON)
 option(KNISHIO_USE_KCORE "Use the KnishIO Crypto Core (kcore) for WOTS+ chains/address and ML-KEM" OFF)
+option(KNISHIO_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 
 if(KNISHIO_NATIVE_ARCH)
     set(_KNISHIO_ARCH_FLAGS " -march=native -mtune=native")
@@ -64,6 +65,16 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     
     # Security flags for MSVC
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GS /DYNAMICBASE /NXCOMPAT")
+endif()
+
+# Sanitizers apply to every target defined below (library, tests, examples) and to the link.
+if(KNISHIO_ENABLE_SANITIZERS)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")   # GNU, Clang, AppleClang
+        add_compile_options(-fsanitize=address -fsanitize=undefined)
+        add_link_options(-fsanitize=address -fsanitize=undefined)
+    else()
+        message(FATAL_ERROR "KNISHIO_ENABLE_SANITIZERS needs GCC or Clang, not ${CMAKE_CXX_COMPILER_ID}")
+    endif()
 endif()
 
 # Include directories

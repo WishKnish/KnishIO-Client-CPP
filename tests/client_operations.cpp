@@ -3,8 +3,9 @@
  * @brief Client, wallet and response methods that failed or did the wrong thing: a passphrase
  *        secret, createMolecule's wallets and OTS version, queryWallets' token filter,
  *        decryptMyMessage, the validator key in an authorization response, QueryBalance's
- *        response, setSecret leaving the replaced secret in freed memory, and the shadow
- *        recipient wallets of the value transfers. Driven against the loopback stub validator; no
+ *        response, setSecret leaving the replaced secret in freed memory, the shadow recipient
+ *        wallets of the value transfers, the batch ids of transfers from a batched source, and
+ *        the auth token left in freed memory. Driven against the loopback stub validator; no
  *        network. `leaks` / LSan runs of this binary also cover the per-request header list.
  */
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -267,11 +269,13 @@ struct PinnedSession {
     PinnedSession() : client(clientFor(stub)) { (void)client->requestAuthToken(secret).get(); }
 
     [[nodiscard]] json row(const std::string& token, const std::string& position, const std::string& amount,
-                           const std::vector<std::string>& units = {}) const {
+                           const std::vector<std::string>& units = {},
+                           const std::optional<std::string>& batchId = std::nullopt) const {
         json unitRows = json::array();
         for (const auto& id : units) unitRows.push_back({{"id", id}, {"name", id}, {"metas", json::object()}});
         return {{"position", position}, {"address", Wallet(secret, token, position).address}, {"tokenSlug", token},
-                {"amount", amount}, {"pubkey", nullptr}, {"batchId", nullptr}, {"bundleHash", bundle},
+                {"amount", amount}, {"pubkey", nullptr}, {"batchId", batchId ? json(*batchId) : json(nullptr)},
+                {"bundleHash", bundle},
                 {"tokenUnits", unitRows}};
     }
 
@@ -408,6 +412,108 @@ void shadowRecipientMolecules() {
         [&](const json& atoms) { shadowAtom(atoms[2], other2, "", "fusion atom"); });
 }
 
+// transferToken and transferTokens from a source with a batch id (a stackable token), as JS: the
+// source and remainder atoms carry the source's batch id, each recipient the caller's batch id or,
+// without one, a fresh 64-character id. The expected hashes come from the JS SDK building the same
+// molecules from the same inputs (backlog wave 2, CPP-1).
+void batchedSourceMolecules() {
+    const std::string other1 = Wallet::generateBundleHash("cpp-2 recipient one");
+    const std::string other2 = Wallet::generateBundleHash("cpp-2 recipient two");
+    const std::vector<std::string> units = {"U1", "U2", "U3", "U4"};
+    const std::map<std::string, std::string> expected = {
+        {"transferTokens", "04ee552d32297e295ab35978a1fb297797f56b5915b5d69ab68447e43027af78"},
+        {"transferToken", "01750ge2e65884d880eb74178f834g9ad776ab7ce2ge87d484db511bc454e79f"},
+    };
+    auto run = [&](const std::string& name, const std::string& sourcePosition,
+                   const std::function<void(PinnedSession&)>& op) -> json {
+        std::cout << "\n" << name << ": a source with a batch id" << std::endl;
+        PinnedSession s;
+        s.stub.setBalance(s.row("STK", sourcePosition, "4", units, std::string("batch-src")));
+        try {
+            op(s);
+        } catch (const std::exception& e) {
+            check(false, name + " proposes a molecule", e.what());
+            return nullptr;
+        }
+        const json molecule = s.sent();
+        if (!molecule.is_object()) {
+            check(false, name + " proposes one molecule");
+            return nullptr;
+        }
+        const json& atoms = molecule["atoms"];
+        check(atomField(atoms.front(), "batchId") == "batch-src", "the source atom carries the source's batch id",
+              atomField(atoms.front(), "batchId"));
+        check(atomField(atoms.back(), "batchId") == "batch-src", "the remainder atom carries the source's batch id",
+              atomField(atoms.back(), "batchId"));
+        check(Molecule::verify(Molecule::jsonToObject(molecule.dump())), "the proposed molecule passes Molecule::verify");
+        if (expected.count(name) != 0) {
+            const std::string hash = pinnedHash(molecule);
+            check(hash == expected.at(name), "the molecular hash equals the JS SDK's", hash + " != " + expected.at(name));
+        }
+        return atoms;
+    };
+
+    json atoms = run("transferTokens", std::string(64, '7'), [&](PinnedSession& s) {
+        (void)s.client->transferTokens("STK", {{other1, 0, "batch-one", {"U1", "U3"}},
+                                               {other2, 0, "batch-two", {"U2"}}}).get();
+    });
+    if (atoms.is_array() && atoms.size() == 4) {
+        check(atomField(atoms[1], "batchId") == "batch-one" && atomField(atoms[2], "batchId") == "batch-two",
+              "each recipient atom carries its caller's batch id");
+    }
+
+    atoms = run("transferToken", std::string(64, '8'), [&](PinnedSession& s) {
+        (void)s.client->transferToken(other1, "STK", 2, "batch-one", {"U1", "U3"}).get();
+    });
+    if (atoms.is_array() && atoms.size() == 3) {
+        check(atomField(atoms[1], "batchId") == "batch-one", "the recipient atom carries the caller's batch id");
+    }
+
+    atoms = run("transferToken without a batch id", std::string(64, '9'), [&](PinnedSession& s) {
+        (void)s.client->transferToken(other1, "STK", 1, "", {"U2"}).get();
+    });
+    if (atoms.is_array() && atoms.size() == 3) {
+        const std::string fresh = atomField(atoms[1], "batchId");
+        check(fresh.size() == 64 && fresh != "batch-src", "the recipient atom carries a fresh 64-character batch id",
+              fresh);
+    }
+}
+
+// The auth token is wiped from every heap block that held it: the client's and its transport's
+// copies when the client is destroyed, and the transport's old copy when setAuthToken replaces it
+// with a longer one (the old buffer is freed).
+void authTokenWiped() {
+    std::cout << "\nauth token: no freed heap block still holds it" << std::endl;
+    {
+        const std::string jwt = "cpp-2 issued jwt " + std::string(80, 'j');
+        knishio_test::StubValidator stub;
+        stub.setJwt(jwt);
+        auto client = clientFor(stub);
+        (void)client->requestAuthToken(knishio::KnishIOClient::generateSecret()).get();
+        freed_watch::start(jwt);
+        client.reset();
+        const int hits = freed_watch::stop();
+        check(hits == 0, "destroying a logged-in client leaves no freed block holding its token",
+              std::to_string(hits) + " freed block(s) held its last 64 bytes");
+    }
+    {
+        const std::string first = "cpp-2 first token " + std::string(70, 'a');
+        const std::string second = "cpp-2 second token " + std::string(140, 'b');
+        auto transport = std::make_unique<knishio::http::GraphQLClient>("http://127.0.0.1:9/graphql");
+        transport->setAuthToken(first);
+        freed_watch::start(first);
+        transport->setAuthToken(second);
+        int hits = freed_watch::stop();
+        check(hits == 0, "GraphQLClient::setAuthToken wipes the token it replaces",
+              std::to_string(hits) + " freed block(s) held its last 64 bytes");
+        freed_watch::start(second);
+        transport.reset();
+        hits = freed_watch::stop();
+        check(hits == 0, "destroying a GraphQLClient wipes its token",
+              std::to_string(hits) + " freed block(s) held its last 64 bytes");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -420,6 +526,8 @@ int main() {
     setSecretReplacesAndWipes();
     createShadowWallet();
     shadowRecipientMolecules();
+    batchedSourceMolecules();
+    authTokenWiped();
 
     std::cout << std::endl;
     if (failures > 0) {

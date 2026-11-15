@@ -734,16 +734,22 @@ KnishIOClient::transferToken(const std::string& bundleHash,
         Wallet source(sec, token, src.position, 64, pImpl_->config.mlKemParameterSet, bindOwnWalletOtsVersion(token, src.position, src.address));
         source.balance = src.balance;             // initValue debits the full balance (UTXO pattern)
         source.tokenUnits = src.tokenUnits;       // stackable units from the Balance response (forward-compat)
+        source.batchId = src.batchId;             // JS: the Balance response's batchId
 
         // 2. RECIPIENT: a shadow wallet for the recipient bundle (we have no secret for it -> no
         //    position/address; identified by bundle + token + batchId). The validator's recipient
         //    path keys off metaId(=bundle) + batchId; the empty address/position are ignored on the
-        //    shadow branch, and a fresh recipient REQUIRES the batchId.
-        Wallet recipient = Wallet::createShadow(bundleHash, token, batchId, pImpl_->config.mlKemParameterSet);
+        //    shadow branch, and a fresh recipient REQUIRES the batchId. As JS: the caller's batch id,
+        //    else a fresh one when the source has a batch id (Wallet.initBatchId).
+        const std::string recipientBatchId =
+            !batchId.empty() ? batchId : (source.batchId.empty() ? std::string() : generateSecret(64));
+        Wallet recipient = Wallet::createShadow(bundleHash, token, recipientBatchId, pImpl_->config.mlKemParameterSet);
 
         // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - amount); the
-        //    validator registers it, advancing the sender's chain.
+        //    validator registers it, advancing the sender's chain. It keeps the source's batch id
+        //    (JS createRemainder; the batch-id rule requires remainder == source).
         Wallet remainder(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
+        remainder.batchId = source.batchId;
 
         // Stackable (NFT) transfer: partition the source's tokenUnits → source + recipient get the
         // SENT units, remainder gets the KEPT units. No-op for fungible (units empty). Must run
@@ -804,16 +810,22 @@ KnishIOClient::transferTokens(const std::string& token,
         Wallet source(sec, token, src.position, 64, pImpl_->config.mlKemParameterSet, bindOwnWalletOtsVersion(token, src.position, src.address));   // re-derives the registered address
         source.balance = src.balance;             // initValues debits the full balance (UTXO)
         source.tokenUnits = src.tokenUnits;
+        source.batchId = src.batchId;
 
-        // 2. RECIPIENTS: a shadow wallet per destination (bundle + token + batchId; empty pos/addr)
+        // 2. RECIPIENTS: a shadow wallet per destination (bundle + token + batchId; empty pos/addr).
+        //    As JS: the caller's batch id, else a fresh one per recipient when the source has one.
         std::vector<Wallet> recipientWallets;
         recipientWallets.reserve(recipients.size());
         for (const auto& r : recipients) {
-            recipientWallets.push_back(Wallet::createShadow(r.bundleHash, token, r.batchId, pImpl_->config.mlKemParameterSet));
+            const std::string recipientBatchId =
+                !r.batchId.empty() ? r.batchId : (source.batchId.empty() ? std::string() : generateSecret(64));
+            recipientWallets.push_back(Wallet::createShadow(r.bundleHash, token, recipientBatchId, pImpl_->config.mlKemParameterSet));
         }
 
-        // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - total)
+        // 3. REMAINDER: a fresh same-token wallet (new position) holding (balance - total); it keeps
+        //    the source's batch id (JS createRemainder)
         Wallet remainder(sec, token, "", 64, pImpl_->config.mlKemParameterSet, successorOtsVersion(source.ots_version));
+        remainder.batchId = source.batchId;
 
         // 4. Stackable (NFT): partition the source's units → source keeps the SENT union, each
         //    recipient its subset, remainder the KEPT. No-op for fungible. Must run before initValues.
@@ -1126,9 +1138,13 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
                     try {
                         nlohmann::json payload = nlohmann::json::parse(pm["payload"].get<std::string>());
                         if (payload.contains("token") && payload["token"].is_string()) {
-                            const std::string jwt = payload["token"].get<std::string>();
+                            std::string jwt = payload["token"].get<std::string>();
+                            if (pImpl_->authToken) {
+                                sodium_memzero(pImpl_->authToken->data(), pImpl_->authToken->size());
+                            }
                             pImpl_->authToken = jwt;
                             pImpl_->httpClient->setAuthToken(jwt);
+                            sodium_memzero(jwt.data(), jwt.size());
                         }
                         // PQ-transport Phase E: plumb the validator's advertised ML-KEM pubkey (payload
                         // "key") + the auth source wallet (its walletPubkey is what the validator

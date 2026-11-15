@@ -91,6 +91,9 @@ public:
     // When set, every request is answered with exactly this body (HTTP 200), whatever it asked.
     void setRawReply(std::string body) { std::lock_guard<std::mutex> lock(mutex_); rawReply_ = std::move(body); }
 
+    // The token the stub issues in every ProposeMolecule payload (default "stub-jwt").
+    void setJwt(std::string jwt) { std::lock_guard<std::mutex> lock(mutex_); jwt_ = std::move(jwt); }
+
     [[nodiscard]] std::vector<json> requests(const std::string& operation) const {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<json> out;
@@ -168,7 +171,7 @@ private:
                            {"status", "accepted"},
                            {"reason", nullptr},
                            {"createdAt", "0"},
-                           {"payload", json{{"token", "stub-jwt"}, {"key", "stub-validator-key"}}.dump()}};
+                           {"payload", json{{"token", jwt_}, {"key", "stub-validator-key"}}.dump()}};
                 reply = json{{"data", {{"ProposeMolecule", pm}}}}.dump();
             } else {
                 reply = R"({"data":null})";
@@ -188,6 +191,7 @@ private:
     json regular_ = nullptr;
     json buffer_ = nullptr;
     std::optional<std::string> rawReply_;
+    std::string jwt_ = "stub-jwt";
     int proposals_ = 0;
 };
 
