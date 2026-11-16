@@ -463,14 +463,14 @@ void batchedSourceMolecules() {
     }
 
     atoms = run("transferToken", std::string(64, '8'), [&](PinnedSession& s) {
-        (void)s.client->transferToken(other1, "STK", 2, "batch-one", {"U1", "U3"}).get();
+        (void)s.client->transferToken(other1, "STK", 0, "batch-one", {"U1", "U3"}).get();
     });
     if (atoms.is_array() && atoms.size() == 3) {
         check(atomField(atoms[1], "batchId") == "batch-one", "the recipient atom carries the caller's batch id");
     }
 
     atoms = run("transferToken without a batch id", std::string(64, '9'), [&](PinnedSession& s) {
-        (void)s.client->transferToken(other1, "STK", 1, "", {"U2"}).get();
+        (void)s.client->transferToken(other1, "STK", 0, "", {"U2"}).get();
     });
     if (atoms.is_array() && atoms.size() == 3) {
         const std::string fresh = atomField(atoms[1], "batchId");

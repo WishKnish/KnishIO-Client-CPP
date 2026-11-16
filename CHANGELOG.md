@@ -32,6 +32,11 @@ substantiate a detail, the entry says so instead of guessing.
   per recipient in `transferTokens`), as JS does. Transfers of a stackable (batched) token now
   sign different bytes than before; fungible transfers are unchanged. Test `ClientOperations`
   pins both molecular hashes to the JS SDK's.
+- `KnishIOClient::transferToken` and `burnToken` ignored stackable `units` when computing the
+  amount: units with amount 0 sent a recipient (or burn) value of `"0"`, and units together with
+  an amount were accepted. As JS does, the amount is now the unit count, and units with an amount
+  throw `KnishIOException("Stackable tokens with unit IDs cannot have an amount!")` before any
+  request. Callers passing an amount with units must pass 0. Test: `PhaseBMolecules`.
 
 ### Security
 

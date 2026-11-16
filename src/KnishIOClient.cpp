@@ -712,6 +712,12 @@ KnishIOClient::transferToken(const std::string& bundleHash,
                             const std::string& batchId,
                             const std::vector<std::string>& units) {
     return std::async(std::launch::async, [this, bundleHash, token, amount, batchId, units]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        // JS transferToken: stackable units set the amount; units together with an amount are refused
+        if (!units.empty() && amount > 0) {
+            throw KnishIOException("Stackable tokens with unit IDs cannot have an amount!");
+        }
+        const long long amountLL = units.empty() ? static_cast<long long>(amount)
+                                                 : static_cast<long long>(units.size());
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
         const std::string senderBundle = getBundle();
@@ -723,7 +729,6 @@ KnishIOClient::transferToken(const std::string& bundleHash,
         if (!src.found) {
             throw KnishIOException("No spendable wallet for token " + token);
         }
-        const long long amountLL = static_cast<long long>(amount);
         long long srcBalance = 0;
         try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
         if (srcBalance < amountLL) {
@@ -854,6 +859,12 @@ KnishIOClient::transferTokens(const std::string& token,
 std::future<std::unique_ptr<response::ResponseProposeMolecule>>
 KnishIOClient::burnToken(const std::string& token, double amount, const std::vector<std::string>& units) {
     return std::async(std::launch::async, [this, token, amount, units]() -> std::unique_ptr<response::ResponseProposeMolecule> {
+        // JS burnTokens: stackable units set the amount; units together with an amount are refused
+        if (!units.empty() && amount > 0) {
+            throw KnishIOException("Stackable tokens with unit IDs cannot have an amount!");
+        }
+        const long long amountLL = units.empty() ? static_cast<long long>(amount)
+                                                 : static_cast<long long>(units.size());
         ensureAuthenticated();
         const std::string sec = pImpl_->secret.value();
         const std::string senderBundle = getBundle();
@@ -864,7 +875,6 @@ KnishIOClient::burnToken(const std::string& token, double amount, const std::vec
         if (!src.found) {
             throw KnishIOException("No spendable wallet for token " + token);
         }
-        const long long amountLL = static_cast<long long>(amount);
         long long srcBalance = 0;
         try { srcBalance = std::stoll(src.balance); } catch (const std::exception&) { srcBalance = 0; }
         if (srcBalance < amountLL) {
@@ -1127,6 +1137,10 @@ KnishIOClient::requestAuthToken(const std::optional<std::string>& secret,
                 return result;
             }
 
+            // The issued JWT also passes through buffers that are not wiped, by design: the
+            // transport's reply body, nlohmann's parse buffers, and the copy in `result` returned to
+            // the caller. Only the client's and the transport's stored copies are wiped (~Impl,
+            // setAuthToken). Wiping the rest would need a zeroing allocator across the JSON types.
             nlohmann::json body = nlohmann::json::parse(httpResp.body);
             result->setData(body.contains("data") && !body["data"].is_null() ? body["data"] : body);
 

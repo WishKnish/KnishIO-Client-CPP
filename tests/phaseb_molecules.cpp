@@ -10,9 +10,10 @@
  *    client has no transport seam): the create_token_units vectors through createToken (tokenUnits
  *    as compact [id, name, metas] triples), which wallet replenishToken credits and which pointer
  *    signs it, how fuseToken assigns batch ids and recipients, that withdrawBufferToken reads
- *    Balance(type: "buffer") and remainders at a fresh position, that a built molecule failing the
- *    check is never sent, and that the raw proposeMolecule path sends a caller-built molecule
- *    unchecked.
+ *    Balance(type: "buffer") and remainders at a fresh position, that transferToken and burnToken
+ *    take the amount from stackable units and refuse units with an amount, that a built molecule
+ *    failing the check is never sent, and that the raw proposeMolecule path sends a caller-built
+ *    molecule unchecked.
  */
 #include <algorithm>
 #include <fstream>
@@ -391,6 +392,71 @@ void replenishRejectsNonPositiveAmount() {
     check(s.built().empty(), "no molecule proposed");
 }
 
+// JS transferToken: stackable units set the amount; units together with an amount are refused.
+void transferTokenAmountFromUnits() {
+    std::cout << "\ntransferToken: stackable units set the amount\n";
+    Session s;
+    const std::string other = KnishIO::Wallet::generateBundleHash(knishio::KnishIOClient::generateSecret());
+    s.stub.setBalance(s.balanceRow("STK", randomPosition(), "3", "", {"U1", "U2", "U3"}));
+    const std::string both = errorOf([&] { (void)s.client->transferToken(other, "STK", 2, "", {"U1", "U3"}).get(); });
+    check(both.find("cannot have an amount") != std::string::npos, "units with an amount refused", both);
+    check(s.built().empty(), "no molecule proposed for the refused transfer");
+    (void)s.client->transferToken(other, "STK", 0, "", {"U1", "U3"}).get();
+    const auto sent = s.built();
+    check(sent.size() == 1, "one molecule proposed", std::to_string(sent.size()));
+    if (sent.size() != 1) return;
+    const auto& a = atomsOf(sent[0]);
+    check(a.size() == 3 && jstr(a[0], "value") == "-3" && jstr(a[1], "value") == "2" && jstr(a[2], "value") == "1",
+          "V values -3, +2 (unit count), +1",
+          a.size() == 3 ? jstr(a[0], "value") + " " + jstr(a[1], "value") + " " + jstr(a[2], "value") : "");
+    check(a.size() == 3 && jmeta(a[1], "tokenUnits") == R"([["U1","U1",{}],["U3","U3",{}]])",
+          "recipient carries the sent units", a.size() == 3 ? jmeta(a[1], "tokenUnits").value_or("<none>") : "");
+}
+
+// JS burnTokens: the same rule as transferToken.
+void burnTokenAmountFromUnits() {
+    std::cout << "\nburnToken: stackable units set the amount\n";
+    Session s;
+    s.stub.setBalance(s.balanceRow("STK", randomPosition(), "3", "", {"U1", "U2", "U3"}));
+    const std::string both = errorOf([&] { (void)s.client->burnToken("STK", 2, {"U1", "U3"}).get(); });
+    check(both.find("cannot have an amount") != std::string::npos, "units with an amount refused", both);
+    check(s.built().empty(), "no molecule proposed for the refused burn");
+    (void)s.client->burnToken("STK", 0, {"U1", "U3"}).get();
+    const auto sent = s.built();
+    check(sent.size() == 1, "one molecule proposed", std::to_string(sent.size()));
+    if (sent.size() != 1) return;
+    const auto& a = atomsOf(sent[0]);
+    check(a.size() == 3 && jstr(a[0], "value") == "-3" && jstr(a[1], "value") == "2" && jstr(a[2], "value") == "1",
+          "V values -3, +2 (unit count) to the burn bundle, +1",
+          a.size() == 3 ? jstr(a[0], "value") + " " + jstr(a[1], "value") + " " + jstr(a[2], "value") : "");
+    check(a.size() == 3 && jstr(a[1], "metaId") == ZERO_BUNDLE
+              && jmeta(a[2], "tokenUnits") == R"([["U2","U2",{}]])",
+          "burn atom to the zero bundle; remainder keeps U2", a.size() == 3 ? jmeta(a[2], "tokenUnits").value_or("<none>") : "");
+}
+
+// Balance units with "metas": null sign as JS does: TokenUnit.createFromGraphQL makes them {}.
+void nullMetasTokenUnitsLikeJs() {
+    std::cout << "\ntransferToken: Balance units with metas null sign as {}\n";
+    Session s;
+    const std::string other = KnishIO::Wallet::generateBundleHash(knishio::KnishIOClient::generateSecret());
+    json row = s.balanceRow("STK", randomPosition(), "3", "", {"U1", "U2", "U3"});
+    for (auto& unit : row["tokenUnits"]) unit["metas"] = nullptr;
+    s.stub.setBalance(row);
+    (void)s.client->transferToken(other, "STK", 0, "", {"U1", "U3"}).get();
+    const auto sent = s.built();
+    check(sent.size() == 1, "one molecule proposed", std::to_string(sent.size()));
+    if (sent.size() != 1) return;
+    const auto& a = atomsOf(sent[0]);
+    // JS reference (createFromGraphQL({metas: null}) + AtomMeta.setAtomWallet)
+    check(a.size() == 3 && jmeta(a[0], "tokenUnits") == R"([["U1","U1",{}],["U3","U3",{}]])"
+              && jmeta(a[1], "tokenUnits") == R"([["U1","U1",{}],["U3","U3",{}]])"
+              && jmeta(a[2], "tokenUnits") == R"([["U2","U2",{}]])",
+          "tokenUnits equal JS: source and recipient [[U1,U1,{}],[U3,U3,{}]], remainder [[U2,U2,{}]]",
+          a.size() == 3 ? jmeta(a[0], "tokenUnits").value_or("<none>") + " | " + jmeta(a[1], "tokenUnits").value_or("<none>")
+                              + " | " + jmeta(a[2], "tokenUnits").value_or("<none>")
+                        : "");
+}
+
 void fuseOwnBundleWithBatchedSource() {
     std::cout << "\nfuseToken: own bundle, source with a batch id\n";
     Session s;
@@ -546,6 +612,9 @@ int main() {
     replenishCreditsExistingWallet();
     replenishCreatesWalletForStackableUnits();
     replenishRejectsNonPositiveAmount();
+    transferTokenAmountFromUnits();
+    burnTokenAmountFromUnits();
+    nullMetasTokenUnitsLikeJs();
     fuseOwnBundleWithBatchedSource();
     fuseForeignBundle();
     fuseRefusedLocally();

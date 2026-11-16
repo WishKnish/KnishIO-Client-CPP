@@ -251,9 +251,11 @@ public:
      *
      * @param bundleHash Recipient's bundle hash
      * @param token Token slug to transfer
-     * @param amount Amount to transfer
+     * @param amount Fungible amount to transfer; leave 0 with @p units (stackable): the amount is
+     *               then units.size(), and an amount together with units throws
      * @param batchId Optional batch id — required for a fresh recipient (no existing wallet for the
      *                token); set it so the recipient becomes a claimable shadow wallet
+     * @param units Stackable unit ids to send (empty for a fungible transfer)
      * @return Future containing the ProposeMolecule response (use isAccepted())
      */
     [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
@@ -284,7 +286,9 @@ public:
      * holds the change. Sum = 0. Reuses initValue with the burn bundle as the recipient.
      *
      * @param token Token slug to burn
-     * @param amount Amount to burn
+     * @param amount Fungible amount to burn; leave 0 with @p units (stackable): the amount is then
+     *               units.size(), and an amount together with units throws
+     * @param units Stackable unit ids to burn (empty for a fungible burn)
      * @return Future containing the ProposeMolecule response (use isAccepted())
      */
     [[nodiscard]] std::future<std::unique_ptr<response::ResponseProposeMolecule>>
