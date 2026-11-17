@@ -16,6 +16,15 @@ substantiate a detail, the entry says so instead of guessing.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-11-17
+
+### Upgrade notes
+
+- Breaking: `TokenUnit::metas` is `nlohmann::ordered_json` (see Changed).
+- Units with served metas sign their metas (they signed `{}`), and metas that are not JSON fail the
+  call (see Fixed).
+- `transferToken` and `burnToken` take the amount from `units` (see Fixed).
+
 ### Added
 
 - CMake option `KNISHIO_ENABLE_SANITIZERS` (default `OFF`) builds every target, the tests
@@ -710,7 +719,8 @@ maturity at that point.
 
 `0.1.37` (2019) predates this SDK's modern line entirely. See the git history.
 
-[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.3.1...HEAD
+[Unreleased]: https://github.com/WishKnish/KnishIO-Client-CPP/compare/2.4.0...HEAD
+[2.4.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.4.0
 [2.3.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.3.1
 [2.3.0]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.3.0
 [2.2.1]: https://github.com/WishKnish/KnishIO-Client-CPP/releases/tag/2.2.1
