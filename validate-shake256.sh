@@ -31,6 +31,7 @@ g++ -std=c++17 -I../src -I../src/third_party -I${SODIUM_PREFIX}/include \
     ../tests/shake256_validation.cpp \
     ../src/utility.cpp \
     ../src/Wallet.cpp \
+    ../src/TokenUnit.cpp \
     ../src/crypto.cpp \
     ../src/crypto_bigint.cpp \
     ../src/third_party/Keccak/Keccak-readable-and-compact.cpp \

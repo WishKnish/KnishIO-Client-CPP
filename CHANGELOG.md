@@ -23,6 +23,14 @@ substantiate a detail, the entry says so instead of guessing.
   -fsanitize=undefined`, compile and link) under GCC, Clang and AppleClang; any other compiler
   stops the configure with an error.
 
+### Changed
+
+- Breaking: `TokenUnit::metas` is `nlohmann::ordered_json` (it was
+  `std::map<std::string, std::string>`, which could hold neither non-string values nor the key
+  order JS signs). `TokenUnit{id, name, {}}` still builds a unit with `{}` metas. New:
+  `TokenUnit::fromGraphQL`, `TokenUnit::toData`, `tokenUnitsFromGraphQL`, `tokenUnitsJson` and
+  `jsKeyOrder` (`TokenUnit.h`).
+
 ### Fixed
 
 - `KnishIOClient::transferToken` and `transferTokens` dropped the source wallet's batch id: the
@@ -37,6 +45,17 @@ substantiate a detail, the entry says so instead of guessing.
   an amount were accepted. As JS does, the amount is now the unit count, and units with an amount
   throw `KnishIOException("Stackable tokens with unit IDs cannot have an amount!")` before any
   request. Callers passing an amount with units must pass 0. Test: `PhaseBMolecules`.
+- Stackable units with metas signed `{}`: the validator serves a unit's `metas` as a JSON string,
+  and the client kept metas only when they arrived as an object, and then only its string values,
+  in sorted key order. As JS's `TokenUnit.createFromGraphQL` does, a non-empty metas string is
+  now parsed (`""`, `"null"` and null become `{}`), and every `tokenUnits` value (transfers,
+  burns, buffer withdrawals, replenishment, fusion and its `fusedTokenUnits`) is written as
+  `JSON.stringify` writes it: array-index keys first in ascending order, then the other keys in
+  document order, recursively. Metas that are not JSON make the operation throw instead of
+  signing the wallet without its units. Molecules with units whose metas are not empty now sign
+  different bytes than before; units with `{}` metas are unchanged. Numbers keep nlohmann's
+  text (`1.0`, `1e+16`), which differs from JS for fractions and exponents. Test:
+  `PhaseBMolecules`.
 
 ### Security
 

@@ -19,26 +19,6 @@ nlohmann::json parseProposePayload(const nlohmann::json& data) {
     }
     return nlohmann::json::object();
 }
-
-// Stackable (NFT) units a wallet holds. Canonical shape: tokenUnits[{id,name,metas}]; only string
-// metas are kept (TokenUnit::metas is string-valued).
-std::vector<KnishIO::TokenUnit> parseTokenUnits(const nlohmann::json& walletData) {
-    std::vector<KnishIO::TokenUnit> units;
-    if (walletData.contains("tokenUnits") && walletData["tokenUnits"].is_array()) {
-        for (const auto& u : walletData["tokenUnits"]) {
-            KnishIO::TokenUnit tu;
-            if (u.contains("id") && u["id"].is_string()) tu.id = u["id"].get<std::string>();
-            if (u.contains("name") && u["name"].is_string()) tu.name = u["name"].get<std::string>();
-            if (u.contains("metas") && u["metas"].is_object()) {
-                for (auto it = u["metas"].begin(); it != u["metas"].end(); ++it) {
-                    if (it.value().is_string()) tu.metas[it.key()] = it.value().get<std::string>();
-                }
-            }
-            units.push_back(std::move(tu));
-        }
-    }
-    return units;
-}
 } // anonymous namespace
 
 // ResponseBalance implementation
@@ -75,7 +55,7 @@ void ResponseBalance::parseData() {
             }
         }
 
-        b.tokenUnits = parseTokenUnits(balanceData);
+        b.tokenUnits = KnishIO::tokenUnitsFromGraphQL(balanceData);
 
         balance = b;
     }
@@ -111,7 +91,7 @@ void ResponseWalletList::parseData() {
                 w.balance = walletData["amount"].get<std::string>();
             if (walletData.contains("batchId") && walletData["batchId"].is_string())
                 w.batchId = walletData["batchId"].get<std::string>();
-            w.tokenUnits = parseTokenUnits(walletData);
+            w.tokenUnits = KnishIO::tokenUnitsFromGraphQL(walletData);
 
             wallets.push_back(w);
         }

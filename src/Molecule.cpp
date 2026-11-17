@@ -84,33 +84,13 @@ std::vector<std::pair<std::string, std::string>> buildWalletMetaKeys(const Walle
 // The all-zeros bundle a burn credits (validator v_isotope.rs ZERO_BUNDLE).
 constexpr const char *ZERO_BUNDLE = "0000000000000000000000000000000000000000000000000000000000000000";
 
-// One unit in the canonical wire form [id, name, metas] (JS TokenUnit.toData()).
-nlohmann::json unitTriple(const TokenUnit &unit)
-{
-	nlohmann::json metas = nlohmann::json::object();
-	for (const auto &kv : unit.metas) {
-		metas[kv.first] = kv.second;
-	}
-	return nlohmann::json::array({unit.id, unit.name, metas});
-}
-
-// A unit list as the compact tokenUnits meta value [[id, name, metas], ...] (JSON.stringify form).
-std::string unitsJson(const std::vector<TokenUnit> &units)
-{
-	nlohmann::json arr = nlohmann::json::array();
-	for (const auto &unit : units) {
-		arr.push_back(unitTriple(unit));
-	}
-	return arr.dump();
-}
-
 // tokenUnits meta for a unit list; JS AtomMeta.setAtomWallet omits it when the list is empty.
 std::vector<std::pair<std::string, std::string>> unitsMeta(const std::vector<TokenUnit> &units)
 {
 	if (units.empty()) {
 		return {};
 	}
-	return {{"tokenUnits", unitsJson(units)}};
+	return {{"tokenUnits", tokenUnitsJson(units)}};
 }
 
 } // anonymous namespace
@@ -557,13 +537,12 @@ std::vector<Atom> Molecule::initTokenFusion(const Wallet &sourceWallet, const Wa
 	}
 	const std::vector<TokenUnit> burned(fused.begin(), fused.end() - 1);
 
-	nlohmann::json fusedTriples = nlohmann::json::array();
+	nlohmann::ordered_json fusedTriples = nlohmann::ordered_json::array();
 	for (const auto &unit : fused) {
-		fusedTriples.push_back(unitTriple(unit));
+		fusedTriples.push_back(unit.toData());
 	}
-	nlohmann::json newUnit = nlohmann::json::array({newTokenUnitId, newTokenUnitId,
-		nlohmann::json{{"fusedTokenUnits", fusedTriples}}});
-	const std::string newUnitJson = nlohmann::json::array({newUnit}).dump();
+	const std::string newUnitJson = tokenUnitsJson({TokenUnit{newTokenUnitId, newTokenUnitId,
+		nlohmann::ordered_json{{"fusedTokenUnits", fusedTriples}}}});
 
 	const long long balance = std::stoll(sourceWallet.balance);
 	const long long fusedCount = static_cast<long long>(fused.size());

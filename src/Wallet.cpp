@@ -786,19 +786,7 @@ void Wallet::splitUnitsMulti(const std::vector<std::vector<std::string>> &recipi
 // (matches JS/Rust/Python/C). Returns "[]" when there are no units.
 std::string Wallet::getTokenUnitsJson() const
 {
-    nlohmann::json arr = nlohmann::json::array();
-    for (const auto &tu : this->tokenUnits) {
-        nlohmann::json metas = nlohmann::json::object();
-        for (const auto &kv : tu.metas) {
-            metas[kv.first] = kv.second;
-        }
-        nlohmann::json inner = nlohmann::json::array();
-        inner.push_back(tu.id);
-        inner.push_back(tu.name);
-        inner.push_back(metas);
-        arr.push_back(inner);
-    }
-    return arr.dump();
+    return tokenUnitsJson(this->tokenUnits);
 }
 
 } // namespace KnishIO

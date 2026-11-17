@@ -131,6 +131,7 @@ set(KNISHIO_SOURCES
     src/Atom.cpp
     src/Molecule.cpp
     src/Wallet.cpp
+    src/TokenUnit.cpp
     src/crypto.cpp
     src/crypto_bigint.cpp
     src/utility.cpp

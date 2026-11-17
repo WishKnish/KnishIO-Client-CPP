@@ -204,13 +204,12 @@ KnishIOClient::queryBalance(const std::string& token,
         auto result = std::make_unique<response::ResponseBalance>();
         if (tw.found) {
             // Re-serialize the stackable units resolveTokenWallet already parsed into the canonical
-            // [{id,name,metas},...] shape so ResponseBalance::parseData populates Balance.tokenUnits
-            // (read-parity with C's query_balance_wallet / JS's queryBalance).
+            // [{id,name,metas},...] shape, metas as the validator's JSON string, so
+            // ResponseBalance::parseData populates Balance.tokenUnits (read-parity with C's
+            // query_balance_wallet / JS's queryBalance).
             nlohmann::json unitsJson = nlohmann::json::array();
             for (const auto& u : tw.tokenUnits) {
-                nlohmann::json metasJson = nlohmann::json::object();
-                for (const auto& [k, v] : u.metas) metasJson[k] = v;
-                unitsJson.push_back({{"id", u.id}, {"name", u.name}, {"metas", metasJson}});
+                unitsJson.push_back({{"id", u.id}, {"name", u.name}, {"metas", u.metas.dump()}});
             }
 
             nlohmann::json balanceData;
@@ -466,27 +465,6 @@ int KnishIOClient::bindOwnWalletOtsVersion(const std::string& token, const std::
 // The position/balance MUST come from the validator: createToken registered the token wallet at a
 // random position (not recoverable client-side), and the V-isotope signer must sign at that
 // registered position.
-// Parse a wallet GraphQL object's `tokenUnits` array into TokenUnit values (canonical
-// { id, name, metas }). Forward-compat: the validator's tokenUnits resolver is a stub returning
-// [] until gap SDK-001 lands, so this yields units only when the response carries them.
-std::vector<KnishIO::TokenUnit> parseWalletTokenUnits(const nlohmann::json& walletObj) {
-    std::vector<KnishIO::TokenUnit> out;
-    if (walletObj.contains("tokenUnits") && walletObj["tokenUnits"].is_array()) {
-        for (const auto& u : walletObj["tokenUnits"]) {
-            KnishIO::TokenUnit tu;
-            if (u.contains("id") && u["id"].is_string()) tu.id = u["id"].get<std::string>();
-            if (u.contains("name") && u["name"].is_string()) tu.name = u["name"].get<std::string>();
-            if (u.contains("metas") && u["metas"].is_object()) {
-                for (auto it = u["metas"].begin(); it != u["metas"].end(); ++it) {
-                    if (it.value().is_string()) tu.metas[it.key()] = it.value().get<std::string>();
-                }
-            }
-            out.push_back(std::move(tu));
-        }
-    }
-    return out;
-}
-
 KnishIOClient::TokenWalletInfo
 KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& token, bool buffer) {
     // Balance(type: "buffer") returns only the bundle's buffer rows; any other type only its
@@ -502,6 +480,7 @@ KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& 
     variables["type"] = buffer ? nlohmann::json("buffer") : nlohmann::json(nullptr);
 
     TokenWalletInfo info;
+    nlohmann::json servedWallet;
     try {
         auto httpResp = pImpl_->httpClient->query(BALANCE_QUERY, variables).get();
         if (httpResp.isSuccess()) {
@@ -523,7 +502,7 @@ KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& 
                 }
                 // A spendable (non-shadow) source must have a real position + address.
                 info.found = !info.position.empty() && !info.address.empty();
-                info.tokenUnits = parseWalletTokenUnits(bal);  // stackable units (forward-compat)
+                servedWallet = bal;
             }
         }
     } catch (const http::EncryptedTransportException&) {
@@ -533,6 +512,9 @@ KnishIOClient::resolveTokenWallet(const std::string& bundle, const std::string& 
     } catch (const std::exception&) {
         // fall through: found stays false
     }
+    // Parsed outside the try: unit metas that are not JSON fail the call, as JS's JSON.parse does,
+    // instead of leaving a found wallet without its units.
+    info.tokenUnits = KnishIO::tokenUnitsFromGraphQL(servedWallet);
     return info;
 }
 

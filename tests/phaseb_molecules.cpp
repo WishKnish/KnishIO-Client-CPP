@@ -457,6 +457,68 @@ void nullMetasTokenUnitsLikeJs() {
                         : "");
 }
 
+// Balance units whose metas the validator serves as a JSON string sign as JS does:
+// TokenUnit.createFromGraphQL parses the string ("" and "null" become {}) and JSON.stringify
+// writes array-index keys first in ascending order, then the other keys in document order.
+void stringMetasTokenUnitsLikeJs() {
+    std::cout << "\ntransferToken: Balance units with string metas sign what JS signs\n";
+    Session s;
+    const std::string other = KnishIO::Wallet::generateBundleHash(knishio::KnishIOClient::generateSecret());
+    json row = s.balanceRow("STK", randomPosition(), "3", "", {"U1", "U2", "U3"});
+    row["tokenUnits"][0]["metas"] = R"({"b":1,"10":{"z":true,"2":[1,{"y":null,"1":"x"}]},"a":"s","05":"lead","9":false})";
+    row["tokenUnits"][1]["metas"] = "";
+    row["tokenUnits"][2]["metas"] = "null";
+    s.stub.setBalance(row);
+    (void)s.client->transferToken(other, "STK", 0, "", {"U1", "U3"}).get();
+    const auto sent = s.built();
+    check(sent.size() == 1, "one molecule proposed", std::to_string(sent.size()));
+    if (sent.size() != 1) return;
+    const auto& a = atomsOf(sent[0]);
+    // JS reference (createFromGraphQL + JSON.stringify([unit.toData()]), the CPP row of the table)
+    const std::string sentUnits =
+        R"([["U1","U1",{"9":false,"10":{"2":[1,{"1":"x","y":null}],"z":true},"b":1,"a":"s","05":"lead"}],["U3","U3",{}]])";
+    check(a.size() == 3 && jmeta(a[0], "tokenUnits") == sentUnits && jmeta(a[1], "tokenUnits") == sentUnits
+              && jmeta(a[2], "tokenUnits") == R"([["U2","U2",{}]])",
+          "tokenUnits equal JS: source and recipient carry U1 metas in JS key order and U3 {}, remainder [[U2,U2,{}]]",
+          a.size() == 3 ? jmeta(a[0], "tokenUnits").value_or("<none>") + " | " + jmeta(a[1], "tokenUnits").value_or("<none>")
+                              + " | " + jmeta(a[2], "tokenUnits").value_or("<none>")
+                        : "");
+}
+
+// JS createFromGraphQL throws SyntaxError on metas that are not JSON: the transfer fails.
+void invalidMetasRefuseTransfer() {
+    std::cout << "\ntransferToken: Balance unit metas that are not JSON fail the call\n";
+    Session s;
+    const std::string other = KnishIO::Wallet::generateBundleHash(knishio::KnishIOClient::generateSecret());
+    json row = s.balanceRow("STK", randomPosition(), "3", "", {"U1", "U2", "U3"});
+    row["tokenUnits"][0]["metas"] = "{bad";
+    s.stub.setBalance(row);
+    const std::string error = errorOf([&] { (void)s.client->transferToken(other, "STK", 0, "", {"U1", "U3"}).get(); });
+    check(!error.empty(), "the call fails", error.empty() ? "no error" : error);
+    check(s.built().empty(), "no molecule proposed", std::to_string(s.built().size()));
+}
+
+// JS fusion (Molecule.initTokenFusion): the fused units keep their metas, in JS key order.
+void fusedUnitsKeepMetasInJsOrder() {
+    std::cout << "\nfuseToken: fused units keep their served metas in JS key order\n";
+    Session s;
+    json row = s.balanceRow("STK", randomPosition(), "3", "", {"U1", "U2", "U3"});
+    row["tokenUnits"][1]["metas"] = R"({"b":1,"2":"x"})";
+    s.stub.setBalance(row);
+    (void)s.client->fuseToken(s.bundle, "STK", "FUSED", {"U1", "U2"}).get();
+    const auto sent = s.built();
+    check(sent.size() == 1, "one molecule proposed", std::to_string(sent.size()));
+    if (sent.size() != 1) return;
+    const auto& a = atomsOf(sent[0]);
+    check(a.size() == 4 && jmeta(a[0], "tokenUnits") == R"([["U1","U1",{}],["U2","U2",{"2":"x","b":1}]])",
+          "source carries U2 with metas in JS key order", a.size() == 4 ? jmeta(a[0], "tokenUnits").value_or("<none>") : "");
+    check(a.size() == 4
+              && jmeta(a[2], "tokenUnits")
+                     == R"([["FUSED","FUSED",{"fusedTokenUnits":[["U1","U1",{}],["U2","U2",{"2":"x","b":1}]]}]])",
+          "F carries N whose fusedTokenUnits contain [U2,U2,{2:x,b:1}]",
+          a.size() == 4 ? jmeta(a[2], "tokenUnits").value_or("<none>") : "");
+}
+
 void fuseOwnBundleWithBatchedSource() {
     std::cout << "\nfuseToken: own bundle, source with a batch id\n";
     Session s;
@@ -615,6 +677,9 @@ int main() {
     transferTokenAmountFromUnits();
     burnTokenAmountFromUnits();
     nullMetasTokenUnitsLikeJs();
+    stringMetasTokenUnitsLikeJs();
+    invalidMetasRefuseTransfer();
+    fusedUnitsKeepMetasInJsOrder();
     fuseOwnBundleWithBatchedSource();
     fuseForeignBundle();
     fuseRefusedLocally();
